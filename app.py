@@ -259,9 +259,12 @@ def clean_title_for_output(title):
 def normalize_title_for_comparison(title):
     if not isinstance(title, str):
         return ""
-    tmp = re.split(r'\s*[:|-]\s*', title, 1)
-    cleaned = re.sub(r'\W+', ' ', tmp[0]).lower().strip()
-    return cleaned
+    cleaned_title = clean_title_for_output(title)
+    abbreviations = {'tm': 'transporte masivo'}
+    for abbr, full_text in abbreviations.items():
+        cleaned_title = re.sub(fr'\b{abbr}\b', full_text, cleaned_title, flags=re.IGNORECASE)
+    normalized_title = re.sub(r'\W+', ' ', cleaned_title).lower().strip()
+    return normalized_title
 
 def corregir_resumen(text):
     if not isinstance(text, str):
@@ -316,30 +319,25 @@ def parse_numeric(val):
     except ValueError:
         return None
 
-def _normalizar_url(url):
-    if not url:
+def normalize_url(url) -> str:
+    if not isinstance(url, str):
         return ""
-    url = str(url).strip().lower()
-    url = re.sub(r'^https?://', '', url)
-    url = re.sub(r'^www\.', '', url)
-    url = url.rstrip('/')
+    url = url.strip().lower().rstrip('/')
+    if not url.startswith('http'):
+        return ""
+    url = re.sub(r'^(https?://)www\.', r'\1', url)
+    url = re.split(r'[?#]', url)[0].rstrip('/')
     return url
 
-# ──────────────────────────────────────────────────────────────────────────────
-# LECTURA Y NORMALIZACIÓN DEL DOSSIER (formato nuevo - documento 3)
-# ──────────────────────────────────────────────────────────────────────────────
-def _extract_cell_link(cell):
-    """Extrae URL del hipervínculo de una celda openpyxl."""
+def extract_link_from_cell(cell):
     if cell.hyperlink and cell.hyperlink.target:
-        return cell.hyperlink.target
-    return None
+        return str(cell.hyperlink.target).strip()
+    return cell.value
 
+# ──────────────────────────────────────────────────────────────────────────────
+# LECTURA Y NORMALIZACIÓN DEL DOSSIER
+# ──────────────────────────────────────────────────────────────────────────────
 def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
-    """
-    Lee la hoja activa con openpyxl preservando hipervínculos,
-    normaliza tipos de medio, mapea región e internet, y
-    devuelve una lista de dicts (una por fila, sin expansión por `;` aún).
-    """
     headers = [cell.value for cell in wb_sheet[1] if cell.value is not None]
     raw_rows = []
 
@@ -352,8 +350,8 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
                 row_data[h] = None
                 continue
             cell = row[i]
-            url = _extract_cell_link(cell)
-            row_data[h] = {"value": cell.value or "Link", "url": url} if url else cell.value
+            # Extrae la URL real como texto plano
+            row_data[h] = extract_link_from_cell(cell)
         raw_rows.append(row_data)
 
     df = pd.DataFrame(raw_rows)
@@ -374,7 +372,7 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     is_print    = df['Tipo de Medio'].isin(['Prensa', 'Revistas'])
     is_bcast    = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
 
-    # ── Región (antes de cambiar Medio) ───────────────────────────────────────
+    # ── Región ────────────────────────────────────────────────────────
     if 'Medio' in df.columns:
         df['Región'] = (
             df['Medio'].astype(str).str.lower().str.strip()
@@ -441,22 +439,19 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     for val_av, val_str, val_url_nota, av_row, int_row, print_row, bcast_row in zip(
         url_nota_av, url_streaming, url_nota_raw, is_av, is_internet, is_print, is_bcast
     ):
+        raw_val_av = str(val_av).strip() if pd.notna(val_av) else ""
+        raw_val_str = str(val_str).strip() if pd.notna(val_str) else ""
+        raw_val_url_nota = str(val_url_nota).strip() if pd.notna(val_url_nota) else ""
+
         # Link Nota
         if av_row:
-            raw_url = val_av.get("url", "") if isinstance(val_av, dict) else str(val_av or "")
-            link_nota_final.append({"value": "Link", "url": raw_url or None})
+            link_nota_final.append(raw_val_av if raw_val_av else None)
         else:
-            if isinstance(val_str, dict):
-                link_nota_final.append(val_str)
-            else:
-                link_nota_final.append({"value": "Link", "url": str(val_str) if val_str else None})
+            link_nota_final.append(raw_val_str if raw_val_str else None)
 
         # Link (Streaming - Imagen) — solo Internet
         if int_row:
-            if isinstance(val_url_nota, dict):
-                link_stream_final.append(val_url_nota)
-            else:
-                link_stream_final.append({"value": "Link", "url": str(val_url_nota) if val_url_nota else None})
+            link_stream_final.append(raw_val_url_nota if raw_val_url_nota else None)
         else:
             link_stream_final.append(None)
 
@@ -489,7 +484,7 @@ def expand_menciones(df):
     return pd.DataFrame(rows_expanded).reset_index(drop=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
-# MAPEO DE MENCIONES (Configuracion.xlsx)
+# MAPEO DE MENCIONES
 # ──────────────────────────────────────────────────────────────────────────────
 def apply_mention_map(df, mention_map):
     if 'Menciones - Empresa' in df.columns:
@@ -501,152 +496,149 @@ def apply_mention_map(df, mention_map):
     return df
 
 # ──────────────────────────────────────────────────────────────────────────────
-# DETECCIÓN DE DUPLICADOS
+# DETECCIÓN DE DUPLICADOS (REGLAS DE NEGOCIO RESTAURADAS)
 # ──────────────────────────────────────────────────────────────────────────────
-def _normalize_url_for_dedup(url):
-    if not isinstance(url, str):
-        return ""
-    url = url.strip().lower().rstrip('/')
-    if not url.startswith('http'):
-        return ""
-    url = re.sub(r'^(https?://)www\.', r'\1', url)
-    url = re.split(r'[?#]', url)[0].rstrip('/')
-    return url
-
-def _get_cell_url(val):
-    """Extrae la URL incrustada de una celda (dict {'value':..,'url':..}) o un string plano."""
-    if isinstance(val, dict):
-        return val.get('url') or ''
-    return str(val) if val else ''
-
-def _title_quality(title):
+def calculate_title_quality_score(title: str) -> int:
     if not isinstance(title, str):
         return -999
     score = 100
     score -= len(re.findall(r'&[#\w]+;', title)) * 10
     score -= title.count('??') * 5
+    score -= title.count('\x9d') * 5
     if len(title) > 250: score -= 5
     if len(title) < 15:  score -= 20
     if '\n' in title:    score -= 15
     if '|' in title:     score -= 5
-    return score
+    return int(score)
 
-def _son_duplicadas(df, a, b):
+def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=0.93, date_proximity_days=1) -> bool:
     """
-    Determina si las filas con índices a y b (ya garantizado: misma
-    'Menciones - Empresa') son duplicadas entre sí.
-
-    Reglas, en este orden:
-      1. Link (Streaming - Imagen) igual (no vacío)  -> SIEMPRE duplicada,
-         incluso si el Medio es distinto (esto puede "rescatar" un par que
-         de otro modo no lo sería por tener Medio distinto).
-      2. Si el Medio es distinto y no se cumplió la regla 1 -> NO duplicada.
-      3. (Mismo Medio) Radio/Televisión con Hora presente en ambas y distinta
-         -> NO duplicada.
-      4. (Mismo Medio) Título igual / muy similar tras normalizar, dentro de
-         la ventana de fecha permitida -> duplicada.
-      5. (Mismo Medio) Link Nota igual (no vacío), solo para Internet
-         -> duplicada.
-      6. Cualquier otro caso -> NO duplicada.
+    Evalúa estrictamente si dos filas son duplicadas bajo las reglas del negocio:
+    
+    1. Agrupamiento por Medio y Mención previo garantiza correspondencia de empresa y medio.
+    2. Si los enlaces 'Link (Streaming - Imagen)' de ambas filas son válidos y diferentes, NO son duplicados.
+    3. Para Radio y Televisión, si tienen horas cargadas y son diferentes, NO son duplicadas.
+    4. El título normalizado sin comillas ni puntuación evalúa coincidencia directa o similaridad difusa.
     """
-    medio_a = str(df.at[a, 'Medio']).strip().lower()
-    medio_b = str(df.at[b, 'Medio']).strip().lower()
-    same_medio = medio_a == medio_b
-
-    # ── Regla 1: Link (Streaming - Imagen) — aplica con o sin mismo Medio ─────
-    su_a = _normalizar_url(_get_cell_url(df.at[a, 'Link (Streaming - Imagen)']))
-    su_b = _normalizar_url(_get_cell_url(df.at[b, 'Link (Streaming - Imagen)']))
-    if su_a and su_b and su_a == su_b:
-        return True
-
-    # ── Regla 2: Medio distinto y no hubo match de link -> no duplicada ───────
-    if not same_medio:
+    # ── Menciones e identificación de Medio (Garantizados por el flujo, pero validados por seguridad) ──
+    menc1 = str(row1.get('Menciones - Empresa', '')).strip().lower()
+    menc2 = str(row2.get('Menciones - Empresa', '')).strip().lower()
+    if menc1 != menc2:
         return False
 
-    tipo = str(df.at[a, 'Tipo de Medio'])
+    medio1 = str(row1.get('Medio', '')).strip().lower()
+    medio2 = str(row2.get('Medio', '')).strip().lower()
+    if medio1 != medio2:
+        return False
 
-    # ── Regla 3: Hora distinta en Radio/Televisión -> no duplicada ────────────
-    if tipo in ('Radio', 'Televisión'):
-        hora_a = str(df.at[a, 'Hora']).strip()
-        hora_b = str(df.at[b, 'Hora']).strip()
-        if hora_a and hora_b and hora_a != hora_b:
+    tipo1 = str(row1.get('Tipo de Medio', '')).strip()
+    tipo2 = str(row2.get('Tipo de Medio', '')).strip()
+    if tipo1 != tipo2:
+        return False
+
+    # ── Regla: Link (Streaming - Imagen) diferente NO es duplicada ──
+    url_col = 'Link (Streaming - Imagen)'
+    url1 = normalize_url(row1.get(url_col, ''))
+    url2 = normalize_url(row2.get(url_col, ''))
+    if url1 and url2 and url1 != url2:
+        return False
+
+    # ── Ventana temporal ──
+    fecha1 = row1.get('Fecha')
+    fecha2 = row2.get('Fecha')
+    if pd.isna(fecha1) or pd.isna(fecha2):
+        return False
+
+    t1 = pd.to_datetime(fecha1)
+    t2 = pd.to_datetime(fecha2)
+
+    if tipo1 == 'Internet':
+        if abs((t1 - t2).days) > date_proximity_days:
+            return False
+    else:
+        if t1.date() != t2.date():
             return False
 
-    # ── Regla 4: Título igual/similar dentro de la ventana de fecha ───────────
-    fa, fb = df.at[a, 'Fecha'], df.at[b, 'Fecha']
-    fecha_ok = True
-    if tipo == 'Internet':
-        if pd.notna(fa) and pd.notna(fb) and abs((fa - fb).days) > 1:
-            fecha_ok = False
-    else:
-        if pd.notna(fa) and pd.notna(fb) and fa.date() != fb.date():
-            fecha_ok = False
+    # ── Regla: Hora diferente en Radio/TV NO es duplicada ──
+    if tipo1 in ['Radio', 'Televisión']:
+        hora1 = str(row1.get('Hora', '')).strip()
+        hora2 = str(row2.get('Hora', '')).strip()
+        if hora1 and hora2 and hora1 != hora2:
+            return False
 
-    if fecha_ok:
-        ta = normalize_title_for_comparison(df.at[a, 'Título'])
-        tb = normalize_title_for_comparison(df.at[b, 'Título'])
-        if ta and tb:
-            sim = SequenceMatcher(None, ta, tb).ratio()
-            if ta == tb or ta in tb or tb in ta or sim >= SIMILARITY_THRESHOLD_TITULOS:
-                return True
-
-    # ── Regla 5: Link Nota igual, solo Internet ────────────────────────────────
-    if tipo == 'Internet':
-        ln_a = _normalize_url_for_dedup(_get_cell_url(df.at[a, 'Link Nota']))
-        ln_b = _normalize_url_for_dedup(_get_cell_url(df.at[b, 'Link Nota']))
-        if ln_a and ln_b and ln_a == ln_b:
+    # ── Regla: Mismo link de nota en Internet es duplicada directa ──
+    if tipo1 == 'Internet':
+        link_nota_1 = normalize_url(row1.get('Link Nota', ''))
+        link_nota_2 = normalize_url(row2.get('Link Nota', ''))
+        if link_nota_1 and link_nota_2 and link_nota_1 == link_nota_2:
             return True
+
+    # ── Comparación de Títulos (Normalización elimina comillas y caracteres especiales) ──
+    titulo1 = normalize_title_for_comparison(row1.get('Título', ''))
+    titulo2 = normalize_title_for_comparison(row2.get('Título', ''))
+
+    if not titulo1 or not titulo2:
+        return False
+
+    if titulo1 == titulo2:
+        return True
+
+    # Substring para cadenas largas
+    if len(titulo1) > 15 and len(titulo2) > 15:
+        if titulo1 in titulo2 or titulo2 in titulo1:
+            return True
+
+    # Similaridad difusa
+    similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
+    if similarity >= title_similarity_threshold:
+        return True
 
     return False
 
-def detect_duplicates(df):
+def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Marca duplicados en la columna 'is_duplicate'. Las filas solo se
-    comparan entre sí cuando comparten 'Menciones - Empresa' (mención
-    distinta nunca puede ser duplicada). El resto de las reglas se evalúan
-    en `_son_duplicadas`.
+    Detecta registros duplicados agrupando por 'Medio' y 'Menciones - Empresa'.
+    El de mayor calidad de título se conserva como original.
     """
     df = df.copy().reset_index(drop=True)
-    df['_orig_idx']      = df.index
-    df['_title_quality'] = df['Título'].apply(_title_quality)
-    df['is_duplicate']   = False
+    df['original_index'] = df.index
+    df['title_quality']  = df['Título'].apply(calculate_title_quality_score)
 
-    # Ordenar: mejor calidad primero → ese registro queda como "original"
+    # Ordenar por calidad descendente, asegurando conservar el mejor
     df.sort_values(
-        by=['_title_quality', 'Fecha', '_orig_idx'],
+        by=['title_quality', 'Fecha', 'original_index'],
         ascending=[False, True, True],
-        inplace=True, na_position='last'
+        inplace=True,
+        na_position='last'
     )
 
-    groups_by_mencion = defaultdict(list)
-    for pos in df.index:
-        mencion = str(df.at[pos, 'Menciones - Empresa']).strip()
-        groups_by_mencion[mencion].append(pos)
+    duplicate_indices = set()
+    grouping_keys     = ['Medio', 'Menciones - Empresa']
 
-    for idxs in groups_by_mencion.values():
-        if len(idxs) < 2:
+    for _, group in df.groupby(grouping_keys, dropna=False):
+        if len(group) < 2:
             continue
-        for i in range(len(idxs)):
-            a = idxs[i]
-            if df.at[a, 'is_duplicate']:
+
+        group_rows = group.to_dict('records')
+
+        for i in range(len(group_rows)):
+            current = group_rows[i]
+            if current['original_index'] in duplicate_indices:
                 continue
-            for j in range(i + 1, len(idxs)):
-                b = idxs[j]
-                if df.at[b, 'is_duplicate']:
+
+            for j in range(i + 1, len(group_rows)):
+                compare = group_rows[j]
+                if compare['original_index'] in duplicate_indices:
                     continue
 
-                if _son_duplicadas(df, a, b):
-                    qa = df.at[a, '_title_quality']
-                    qb = df.at[b, '_title_quality']
-                    if qa >= qb:
-                        df.at[b, 'is_duplicate'] = True
-                    else:
-                        df.at[a, 'is_duplicate'] = True
-                        break  # 'a' ya quedó marcada como duplicada
+                if are_duplicates(pd.Series(current), pd.Series(compare), title_similarity_threshold=SIMILARITY_THRESHOLD_TITULOS):
+                    duplicate_indices.add(compare['original_index'])
 
-    # Restaurar orden original
-    df.sort_values('_orig_idx', inplace=True)
-    df.drop(columns=['_orig_idx', '_title_quality'], inplace=True)
+    df['is_duplicate'] = df['original_index'].isin(duplicate_indices)
+
+    # Restaurar orden original y eliminar columnas de control
+    df.sort_values('original_index', inplace=True)
+    df.drop(columns=['original_index', 'title_quality'], inplace=True)
     return df.reset_index(drop=True)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -656,11 +648,6 @@ LABEL_MAP_TONO = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo',
                   '1': 'Positivo', '0': 'Neutro', '-1': 'Negativo'}
 
 def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar):
-    """
-    Aplica los pipelines PKL solo a noticias únicas (is_duplicate == False).
-    Homogeneiza temas por título similar y aplica Mapa_Temas.
-    Las filas duplicadas quedan marcadas como 'Duplicada' / '-'.
-    """
     df = df.copy()
     mask_unique = ~df['is_duplicate']
     df_valid = df[mask_unique].copy()
@@ -683,14 +670,14 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
     df_valid['_resumen_procesado'] = df_valid['_texto_ia'].apply(preprocess_text_for_topic)
     df_valid['Temas Generales - Tema'] = topic_pipeline.predict(df_valid['_resumen_procesado'])
 
-    # ── Homogeneización de temas por título normalizado ────────────────────────
+    # Homogeneización de temas por título normalizado
     df_valid['_titulo_norm'] = df_valid['Título'].apply(normalize_title_for_comparison)
     homo = df_valid.groupby('_titulo_norm')['Temas Generales - Tema'].transform(
         lambda x: x.mode()[0] if not x.mode().empty else x
     )
     df_valid['Temas Generales - Tema'] = homo
 
-    # ── Mapa_Temas ─────────────────────────────────────────────────────────────
+    # Mapa_Temas
     df_valid['Tema'] = (
         df_valid['Temas Generales - Tema'].astype(str).str.strip()
         .map(final_topic_map)
@@ -715,16 +702,9 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 # GENERACIÓN DEL EXCEL DE SALIDA
 # ──────────────────────────────────────────────────────────────────────────────
 def to_excel(df):
-    output = io.BytesIO()
     cols   = [c for c in FINAL_ORDER if c in df.columns]
     df_out = df[cols].copy()
 
-    with pd.ExcelWriter(output, engine='xlsxwriter',
-                        datetime_format='dd/mm/yyyy', date_format='dd/mm/yyyy') as writer:
-        # Escribir con openpyxl para conservar hipervínculos correctamente
-        pass  # usaremos openpyxl directamente abajo
-
-    # ── Construir con openpyxl para hipervínculos ──────────────────────────────
     wb  = Workbook()
     ws  = wb.active
     ws.title = 'Resultado'
@@ -758,15 +738,12 @@ def to_excel(df):
             elif col_name in NUM_COLS:
                 cv = parse_numeric(val)
 
-            elif isinstance(val, dict) and 'url' in val:
-                url = val.get('url')
-                cv  = val.get('value', 'Link')
-                if url:
-                    link_map[ci] = url
-
-            elif isinstance(val, str) and val.startswith('http'):
-                cv = 'Link'
-                link_map[ci] = val
+            elif col_name in ('Link Nota', 'Link (Streaming - Imagen)'):
+                if pd.notna(val) and isinstance(val, str) and val.startswith('http'):
+                    cv = 'Link'
+                    link_map[ci] = val
+                else:
+                    cv = val if pd.notna(val) else None
 
             else:
                 cv = None if (isinstance(val, float) and np.isnan(val)) else val
@@ -816,127 +793,13 @@ def to_excel(df):
     return out_buf.getvalue()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PROCESO COMPLETO
-# ──────────────────────────────────────────────────────────────────────────────
-def run_full_process(dossier_file, download_placeholder):
-    st.markdown("<hr>", unsafe_allow_html=True)
-    progress_bar = st.progress(0, text="Iniciando proceso...")
-
-    # 1. Modelos y configuración
-    progress_bar.progress(5, text="Paso 1 / 7 — Cargando modelos PKL y configuración...")
-    sentiment_pipeline, topic_pipeline = load_ml_models()
-
-    config_path = _find_config_file()
-    if not config_path:
-        st.error(
-            "**No se encontró `Configuracion.xlsx`** en el repositorio. "
-            "Asegúrate de que esté en la raíz del proyecto."
-        )
-        st.stop()
-
-    try:
-        region_map, internet_map, mention_map, final_topic_map = load_config(str(config_path))
-    except Exception as e:
-        st.error(f"**Error al cargar `Configuracion.xlsx`:** {e}")
-        st.stop()
-
-    # 2. Lectura del dossier
-    progress_bar.progress(15, text="Paso 2 / 7 — Leyendo Dossier y normalizando estructura...")
-    wb = load_workbook(dossier_file, data_only=True)
-    df = read_and_normalize_dossier(wb.active, region_map, internet_map)
-
-    if df['Fecha'].isna().any():
-        st.warning("⚠️ Algunas fechas no se pudieron convertir. Revisa el archivo original.")
-
-    # 3. Expansión por ; en Menciones
-    progress_bar.progress(28, text="Paso 3 / 7 — Expandiendo filas por menciones (;)...")
-    df = expand_menciones(df)
-
-    # 4. Mapeo de menciones
-    progress_bar.progress(35, text="Paso 4 / 7 — Aplicando mapeos de menciones y configuración...")
-    df = apply_mention_map(df, mention_map)
-
-    # 5. Detección de duplicados
-    progress_bar.progress(45, text="Paso 4b / 7 — Detectando duplicados...")
-    df = detect_duplicates(df)
-
-    # 6 & 7. Clasificación PKL
-    df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
-
-    progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
-    excel_data  = to_excel(df)
-    filename    = f"Dossier_Procesado_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-    total       = len(df)
-    dups_count  = int(df['is_duplicate'].sum())
-    unique_count = total - dups_count
-
-    progress_bar.progress(100, text="✓ Proceso completado")
-
-    # Botón de descarga en el placeholder
-    with download_placeholder:
-        st.download_button(
-            label="⬇ Descargar archivo procesado (.xlsx)",
-            data=excel_data,
-            file_name=filename,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-
-    st.markdown(f"""
-    <div class="success-banner">
-        <div class="icon">⚡</div>
-        <div class="text">
-            <strong>Proceso finalizado correctamente</strong>
-            <span>{total:,} filas procesadas · {unique_count:,} únicas · {dups_count:,} duplicadas</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<p class="results-header">Resumen del proceso</p>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="metrics-row">
-        <div class="metric-card">
-            <div class="metric-value">{total:,}</div>
-            <div class="metric-label">Filas totales procesadas</div>
-        </div>
-        <div class="metric-card accent">
-            <div class="metric-value">{unique_count:,}</div>
-            <div class="metric-label">Noticias únicas analizadas</div>
-        </div>
-        <div class="metric-card muted">
-            <div class="metric-value">{dups_count:,}</div>
-            <div class="metric-label">Filas marcadas como duplicadas</div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<p class="results-header">Previsualización de resultados</p>', unsafe_allow_html=True)
-    cols_preview = [c for c in FINAL_ORDER if c in df.columns]
-    df_display   = df[cols_preview].copy()
-
-    if 'Fecha' in df_display.columns:
-        df_display['Fecha'] = (
-            pd.to_datetime(df_display['Fecha'], errors='coerce')
-            .dt.strftime('%d/%m/%Y')
-            .fillna('FECHA INVÁLIDA')
-        )
-
-    # Aplanar columnas dict para visualización
-    for link_col in ['Link Nota', 'Link (Streaming - Imagen)']:
-        if link_col in df_display.columns:
-            df_display[link_col] = df_display[link_col].apply(
-                lambda v: v.get('url', '') if isinstance(v, dict) else (v or '')
-            )
-
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-# ──────────────────────────────────────────────────────────────────────────────
 # INTERFAZ PRINCIPAL
 # ──────────────────────────────────────────────────────────────────────────────
 
-# ── Inicializar session_state ─────────────────────────────────────────────────
+# Inicializar session_state
 for _k in ("result_1", "result_2"):
     if _k not in st.session_state:
-        st.session_state[_k] = None  # None | {"data": bytes, "filename": str, "label": str}
+        st.session_state[_k] = None
 
 st.markdown("""
 <div class="app-header">
@@ -979,7 +842,7 @@ with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Uploaders ─────────────────────────────────────────────────────────────────
+# Uploaders
 st.markdown('<div class="card-title">Carga de Dossiers</div>', unsafe_allow_html=True)
 
 col_up1, col_up2 = st.columns(2)
@@ -1026,7 +889,6 @@ with col_up2:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Botón de inicio ───────────────────────────────────────────────────────────
 files_loaded = [(file_1, "Marca", "result_1"), (file_2, "Competencia", "result_2")]
 files_loaded = [(f, lbl, key) for f, lbl, key in files_loaded if f is not None]
 n_files = len(files_loaded)
@@ -1037,9 +899,11 @@ start_clicked = st.button(
     type="primary",
 )
 
-# ── Procesamiento — guarda resultados en session_state ────────────────────────
+# Espacio reservado para descargas
+download_area = st.empty()
+
+# Procesamiento
 if start_clicked and files_loaded:
-    # Limpiar resultados anteriores
     st.session_state["result_1"] = None
     st.session_state["result_2"] = None
 
@@ -1049,7 +913,7 @@ if start_clicked and files_loaded:
 
         progress_bar = st.progress(0, text="Iniciando proceso...")
 
-        # ── Pasos inline (igual que run_full_process pero guardando en state) ──
+        # 1. Carga de recursos
         progress_bar.progress(5, text="Paso 1 / 7 — Cargando modelos PKL y configuración...")
         sentiment_pipeline, topic_pipeline = load_ml_models()
 
@@ -1064,6 +928,7 @@ if start_clicked and files_loaded:
             st.error(f"**Error al cargar `Configuracion.xlsx`:** {e}")
             continue
 
+        # 2. Carga y normalización
         progress_bar.progress(15, text="Paso 2 / 7 — Leyendo Dossier y normalizando estructura...")
         wb = load_workbook(f, data_only=True)
         df = read_and_normalize_dossier(wb.active, region_map, internet_map)
@@ -1071,17 +936,21 @@ if start_clicked and files_loaded:
         if df["Fecha"].isna().any():
             st.warning("⚠️ Algunas fechas no se pudieron convertir. Revisa el archivo original.")
 
+        # 3. Menciones
         progress_bar.progress(28, text="Paso 3 / 7 — Expandiendo filas por menciones (;)...")
         df = expand_menciones(df)
 
         progress_bar.progress(35, text="Paso 4 / 7 — Aplicando mapeos de menciones...")
         df = apply_mention_map(df, mention_map)
 
-        progress_bar.progress(45, text="Paso 4b / 7 — Detectando duplicados...")
+        # 4. Duplicados
+        progress_bar.progress(45, text="Paso 4b / 7 — Detectando duplicados de forma optimizada...")
         df = detect_duplicates(df)
 
+        # 5. Inteligencia Artificial
         df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
 
+        # 6. Salida
         progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
         excel_data   = to_excel(df)
         filename     = f"Dossier_{label}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -1091,7 +960,6 @@ if start_clicked and files_loaded:
 
         progress_bar.progress(100, text="✓ Proceso completado")
 
-        # Guardar en session_state
         st.session_state[state_key] = {
             "data":     excel_data,
             "filename": filename,
@@ -1105,7 +973,7 @@ if start_clicked and files_loaded:
         <div class="success-banner">
             <div class="icon">⚡</div>
             <div class="text">
-                <strong>{label} — Proceso finalizado</strong>
+                <strong>{label} — Proceso finalizado correctamente</strong>
                 <span>{total:,} filas · {unique_count:,} únicas · {dups_count:,} duplicadas</span>
             </div>
         </div>
@@ -1128,48 +996,31 @@ if start_clicked and files_loaded:
         </div>
         """, unsafe_allow_html=True)
 
-        # Previsualización
-        st.markdown('<p class="results-header">Previsualización</p>', unsafe_allow_html=True)
-        cols_preview = [c for c in FINAL_ORDER if c in df.columns]
-        df_display   = df[cols_preview].copy()
-        if "Fecha" in df_display.columns:
-            df_display["Fecha"] = (
-                pd.to_datetime(df_display["Fecha"], errors="coerce")
-                .dt.strftime("%d/%m/%Y")
-                .fillna("FECHA INVÁLIDA")
-            )
-        for lc in ["Link Nota", "Link (Streaming - Imagen)"]:
-            if lc in df_display.columns:
-                df_display[lc] = df_display[lc].apply(
-                    lambda v: v.get("url", "") if isinstance(v, dict) else (v or "")
-                )
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-
-# ── Botones de descarga — siempre visibles si hay resultado en state ──────────
+# Render de botones de descarga
 res1 = st.session_state.get("result_1")
 res2 = st.session_state.get("result_2")
 
 if res1 or res2:
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="card-title">Descargas</div>', unsafe_allow_html=True)
-    dl_col1, dl_col2 = st.columns(2)
+    with download_area.container():
+        st.markdown('<div class="card-title">Descargas</div>', unsafe_allow_html=True)
+        dl_col1, dl_col2 = st.columns(2)
 
-    with dl_col1:
-        if res1:
-            st.download_button(
-                label=f"⬇ Descargar {res1['label']}",
-                data=res1["data"],
-                file_name=res1["filename"],
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_final_1",
-            )
+        with dl_col1:
+            if res1:
+                st.download_button(
+                    label=f"⬇ Descargar {res1['label']}",
+                    data=res1["data"],
+                    file_name=res1["filename"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_final_1",
+                )
 
-    with dl_col2:
-        if res2:
-            st.download_button(
-                label=f"⬇ Descargar {res2['label']}",
-                data=res2["data"],
-                file_name=res2["filename"],
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="dl_final_2",
-            )
+        with dl_col2:
+            if res2:
+                st.download_button(
+                    label=f"⬇ Descargar {res2['label']}",
+                    data=res2["data"],
+                    file_name=res2["filename"],
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_final_2",
+                )
