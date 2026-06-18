@@ -919,6 +919,12 @@ def run_full_process(dossier_file, download_placeholder):
 # ──────────────────────────────────────────────────────────────────────────────
 # INTERFAZ PRINCIPAL
 # ──────────────────────────────────────────────────────────────────────────────
+
+# ── Inicializar session_state ─────────────────────────────────────────────────
+for _k in ("result_1", "result_2"):
+    if _k not in st.session_state:
+        st.session_state[_k] = None  # None | {"data": bytes, "filename": str, "label": str}
+
 st.markdown("""
 <div class="app-header">
     <div class="badge">Media Intelligence · PKL</div>
@@ -937,13 +943,13 @@ st.markdown("""
     </div>
     <div class="step">
         <div class="step-num">2</div>
-        <div class="step-text">Sube uno o dos dossiers (.xlsx). Si subes dos, cada uno
-        se procesa de forma independiente y obtienes un archivo descargable por cada uno.</div>
+        <div class="step-text">Sube uno o dos dossiers. Si subes dos, cada uno
+        se procesa de forma independiente y obtienes un archivo descargable por separado.</div>
     </div>
     <div class="step">
         <div class="step-num">3</div>
         <div class="step-text">Haz clic en <strong>Iniciar proceso</strong>.
-        Los archivos aparecerán listos para descargar al finalizar.</div>
+        Los botones de descarga aparecerán al finalizar.</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -960,7 +966,7 @@ with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Carga de archivos ──────────────────────────────────────────────────────────
+# ── Uploaders ─────────────────────────────────────────────────────────────────
 st.markdown('<div class="card-title">Carga de Dossiers</div>', unsafe_allow_html=True)
 
 col_up1, col_up2 = st.columns(2)
@@ -1007,38 +1013,150 @@ with col_up2:
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── Botón único + placeholders de descarga ────────────────────────────────────
-files_loaded = [f for f in [file_1, file_2] if f is not None]
+# ── Botón de inicio ───────────────────────────────────────────────────────────
+files_loaded = [(file_1, "Marca", "result_1"), (file_2, "Competencia", "result_2")]
+files_loaded = [(f, lbl, key) for f, lbl, key in files_loaded if f is not None]
 n_files = len(files_loaded)
 
-col_start, col_dl1, col_dl2 = st.columns([2, 1, 1])
+start_clicked = st.button(
+    f"▶  Procesar {n_files} dossier{'s' if n_files != 1 else ''}",
+    disabled=n_files == 0,
+    type="primary",
+)
 
-with col_start:
-    start_clicked = st.button(
-        f"▶  Procesar {n_files} dossier{'s' if n_files != 1 else ''}",
-        disabled=n_files == 0,
-        type="primary",
-    )
-
-with col_dl1:
-    ph_dl1 = st.empty()
-    if not start_clicked:
-        with ph_dl1:
-            st.button("⬇ Dossier 1", disabled=True, type="primary", key="btn_dl1_dis")
-
-with col_dl2:
-    ph_dl2 = st.empty()
-    if not start_clicked:
-        with ph_dl2:
-            st.button("⬇ Dossier 2", disabled=True, type="primary", key="btn_dl2_dis")
-
-# ── Procesamiento ─────────────────────────────────────────────────────────────
+# ── Procesamiento — guarda resultados en session_state ────────────────────────
 if start_clicked and files_loaded:
-    placeholders = [ph_dl1, ph_dl2]
-    for i, f in enumerate(files_loaded):
-        label = "Marca" if i == 0 and file_1 is not None else "Competencia"
-        # Si solo se subió el segundo archivo, ajustar etiqueta
-        if file_1 is None:
-            label = "Competencia"
-        st.markdown(f"---\n### Procesando: **{label}** — `{f.name}`")
-        run_full_process(f, placeholders[i])
+    # Limpiar resultados anteriores
+    st.session_state["result_1"] = None
+    st.session_state["result_2"] = None
+
+    for f, label, state_key in files_loaded:
+        st.markdown(f"### {label} — `{f.name}`")
+        st.markdown("<hr>", unsafe_allow_html=True)
+
+        progress_bar = st.progress(0, text="Iniciando proceso...")
+
+        # ── Pasos inline (igual que run_full_process pero guardando en state) ──
+        progress_bar.progress(5, text="Paso 1 / 7 — Cargando modelos PKL y configuración...")
+        sentiment_pipeline, topic_pipeline = load_ml_models()
+
+        config_path = _find_config_file()
+        if not config_path:
+            st.error("**No se encontró `Configuracion.xlsx`** en el repositorio.")
+            continue
+
+        try:
+            region_map, internet_map, mention_map, final_topic_map = load_config(str(config_path))
+        except Exception as e:
+            st.error(f"**Error al cargar `Configuracion.xlsx`:** {e}")
+            continue
+
+        progress_bar.progress(15, text="Paso 2 / 7 — Leyendo Dossier y normalizando estructura...")
+        wb = load_workbook(f, data_only=True)
+        df = read_and_normalize_dossier(wb.active, region_map, internet_map)
+
+        if df["Fecha"].isna().any():
+            st.warning("⚠️ Algunas fechas no se pudieron convertir. Revisa el archivo original.")
+
+        progress_bar.progress(28, text="Paso 3 / 7 — Expandiendo filas por menciones (;)...")
+        df = expand_menciones(df)
+
+        progress_bar.progress(35, text="Paso 4 / 7 — Aplicando mapeos de menciones...")
+        df = apply_mention_map(df, mention_map)
+
+        progress_bar.progress(45, text="Paso 4b / 7 — Detectando duplicados...")
+        df = detect_duplicates(df)
+
+        df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
+
+        progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
+        excel_data   = to_excel(df)
+        filename     = f"Dossier_{label}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        total        = len(df)
+        dups_count   = int(df["is_duplicate"].sum())
+        unique_count = total - dups_count
+
+        progress_bar.progress(100, text="✓ Proceso completado")
+
+        # Guardar en session_state
+        st.session_state[state_key] = {
+            "data":     excel_data,
+            "filename": filename,
+            "label":    label,
+            "total":    total,
+            "unique":   unique_count,
+            "dups":     dups_count,
+        }
+
+        st.markdown(f"""
+        <div class="success-banner">
+            <div class="icon">⚡</div>
+            <div class="text">
+                <strong>{label} — Proceso finalizado</strong>
+                <span>{total:,} filas · {unique_count:,} únicas · {dups_count:,} duplicadas</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="metrics-row">
+            <div class="metric-card">
+                <div class="metric-value">{total:,}</div>
+                <div class="metric-label">Filas totales</div>
+            </div>
+            <div class="metric-card accent">
+                <div class="metric-value">{unique_count:,}</div>
+                <div class="metric-label">Noticias únicas</div>
+            </div>
+            <div class="metric-card muted">
+                <div class="metric-value">{dups_count:,}</div>
+                <div class="metric-label">Duplicadas</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Previsualización
+        st.markdown('<p class="results-header">Previsualización</p>', unsafe_allow_html=True)
+        cols_preview = [c for c in FINAL_ORDER if c in df.columns]
+        df_display   = df[cols_preview].copy()
+        if "Fecha" in df_display.columns:
+            df_display["Fecha"] = (
+                pd.to_datetime(df_display["Fecha"], errors="coerce")
+                .dt.strftime("%d/%m/%Y")
+                .fillna("FECHA INVÁLIDA")
+            )
+        for lc in ["Link Nota", "Link (Streaming - Imagen)"]:
+            if lc in df_display.columns:
+                df_display[lc] = df_display[lc].apply(
+                    lambda v: v.get("url", "") if isinstance(v, dict) else (v or "")
+                )
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+# ── Botones de descarga — siempre visibles si hay resultado en state ──────────
+res1 = st.session_state.get("result_1")
+res2 = st.session_state.get("result_2")
+
+if res1 or res2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown('<div class="card-title">Descargas</div>', unsafe_allow_html=True)
+    dl_col1, dl_col2 = st.columns(2)
+
+    with dl_col1:
+        if res1:
+            st.download_button(
+                label=f"⬇ Descargar {res1['label']}",
+                data=res1["data"],
+                file_name=res1["filename"],
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_final_1",
+            )
+
+    with dl_col2:
+        if res2:
+            st.download_button(
+                label=f"⬇ Descargar {res2['label']}",
+                data=res2["data"],
+                file_name=res2["filename"],
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_final_2",
+            )
