@@ -937,13 +937,13 @@ st.markdown("""
     </div>
     <div class="step">
         <div class="step-num">2</div>
-        <div class="step-text">Sube cada dossier en su pestaña correspondiente
-        (<strong>Marca</strong> o <strong>Competencia</strong>). Se procesan de forma independiente.</div>
+        <div class="step-text">Sube uno o dos dossiers (.xlsx). Si subes dos, cada uno
+        se procesa de forma independiente y obtienes un archivo descargable por cada uno.</div>
     </div>
     <div class="step">
         <div class="step-num">3</div>
-        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong> dentro de cada pestaña.
-        Cada una genera su propio archivo descargable.</div>
+        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong>.
+        Los archivos aparecerán listos para descargar al finalizar.</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -960,64 +960,85 @@ with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# ── Carga de archivos ──────────────────────────────────────────────────────────
+st.markdown('<div class="card-title">Carga de Dossiers</div>', unsafe_allow_html=True)
 
-def render_dossier_tab(tab_key: str, tab_label: str):
-    """
-    Renderiza un panel completo de carga + proceso + descarga
-    para un dossier. tab_key diferencia los widgets entre pestañas.
-    """
-    st.markdown('<div class="card-title">Carga del Dossier</div>', unsafe_allow_html=True)
+col_up1, col_up2 = st.columns(2)
 
-    dossier_file = st.file_uploader(
-        f"Arrastra el Dossier de {tab_label} aquí o haz clic para seleccionarlo",
+with col_up1:
+    st.markdown("**Dossier 1 · Marca**")
+    file_1 = st.file_uploader(
+        "Dossier Marca",
         type=["xlsx"],
         accept_multiple_files=False,
         label_visibility="collapsed",
-        key=f"uploader_{tab_key}",
+        key="uploader_1",
     )
-
-    if dossier_file:
+    if file_1:
         st.markdown(
-            f'<div class="file-status ok">✓ Dossier cargado — <strong>{dossier_file.name}</strong></div>',
+            f'<div class="file-status ok">✓ {file_1.name}</div>',
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            f'<div class="file-status missing">⚠ Sube el Dossier de {tab_label} (.xlsx) para continuar</div>',
+            '<div class="file-status missing">⚠ Sin archivo</div>',
             unsafe_allow_html=True,
         )
 
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    col_start, col_download = st.columns(2)
-
-    with col_start:
-        start_clicked = st.button(
-            f"▶  Procesar {tab_label}",
-            disabled=dossier_file is None,
-            type="primary",
-            key=f"btn_start_{tab_key}",
+with col_up2:
+    st.markdown("**Dossier 2 · Competencia** *(opcional)*")
+    file_2 = st.file_uploader(
+        "Dossier Competencia",
+        type=["xlsx"],
+        accept_multiple_files=False,
+        label_visibility="collapsed",
+        key="uploader_2",
+    )
+    if file_2:
+        st.markdown(
+            f'<div class="file-status ok">✓ {file_2.name}</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="file-status missing">⚠ Sin archivo</div>',
+            unsafe_allow_html=True,
         )
 
-    with col_download:
-        download_placeholder = st.empty()
-        if not start_clicked:
-            with download_placeholder:
-                st.button(
-                    "⬇ Descargar archivo procesado (.xlsx)",
-                    disabled=True,
-                    type="primary",
-                    key=f"btn_dl_disabled_{tab_key}",
-                )
+st.markdown("<br>", unsafe_allow_html=True)
 
-    if start_clicked:
-        run_full_process(dossier_file, download_placeholder)
+# ── Botón único + placeholders de descarga ────────────────────────────────────
+files_loaded = [f for f in [file_1, file_2] if f is not None]
+n_files = len(files_loaded)
 
+col_start, col_dl1, col_dl2 = st.columns([2, 1, 1])
 
-tab_marca, tab_comp = st.tabs(["🏷️  Marca", "🏢  Competencia"])
+with col_start:
+    start_clicked = st.button(
+        f"▶  Procesar {n_files} dossier{'s' if n_files != 1 else ''}",
+        disabled=n_files == 0,
+        type="primary",
+    )
 
-with tab_marca:
-    render_dossier_tab("marca", "Marca")
+with col_dl1:
+    ph_dl1 = st.empty()
+    if not start_clicked:
+        with ph_dl1:
+            st.button("⬇ Dossier 1", disabled=True, type="primary", key="btn_dl1_dis")
 
-with tab_comp:
-    render_dossier_tab("competencia", "Competencia")
+with col_dl2:
+    ph_dl2 = st.empty()
+    if not start_clicked:
+        with ph_dl2:
+            st.button("⬇ Dossier 2", disabled=True, type="primary", key="btn_dl2_dis")
+
+# ── Procesamiento ─────────────────────────────────────────────────────────────
+if start_clicked and files_loaded:
+    placeholders = [ph_dl1, ph_dl2]
+    for i, f in enumerate(files_loaded):
+        label = "Marca" if i == 0 and file_1 is not None else "Competencia"
+        # Si solo se subió el segundo archivo, ajustar etiqueta
+        if file_1 is None:
+            label = "Competencia"
+        st.markdown(f"---\n### Procesando: **{label}** — `{f.name}`")
+        run_full_process(f, placeholders[i])
