@@ -937,12 +937,13 @@ st.markdown("""
     </div>
     <div class="step">
         <div class="step-num">2</div>
-        <div class="step-text">Sube el archivo <strong>Dossier (.xlsx)</strong> en el área de abajo.</div>
+        <div class="step-text">Sube cada dossier en su pestaña correspondiente
+        (<strong>Marca</strong> o <strong>Competencia</strong>). Se procesan de forma independiente.</div>
     </div>
     <div class="step">
         <div class="step-num">3</div>
-        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong>. El sistema normaliza,
-        detecta duplicados y clasifica tono y tema automáticamente.</div>
+        <div class="step-text">Haz clic en <strong>Iniciar proceso</strong> dentro de cada pestaña.
+        Cada una genera su propio archivo descargable.</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -959,47 +960,64 @@ with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Carga del Dossier
-st.markdown('<div class="card-title">Carga del Dossier</div>', unsafe_allow_html=True)
-dossier_file = st.file_uploader(
-    "Arrastra el archivo Dossier aquí o haz clic para seleccionarlo",
-    type=["xlsx"],
-    accept_multiple_files=False,
-    label_visibility="collapsed",
-)
 
-if dossier_file:
-    st.markdown(
-        f'<div class="file-status ok">✓ Dossier cargado — <strong>{dossier_file.name}</strong></div>',
-        unsafe_allow_html=True,
-    )
-else:
-    st.markdown(
-        '<div class="file-status missing">⚠ Sube el archivo Dossier (.xlsx) para continuar</div>',
-        unsafe_allow_html=True,
+def render_dossier_tab(tab_key: str, tab_label: str):
+    """
+    Renderiza un panel completo de carga + proceso + descarga
+    para un dossier. tab_key diferencia los widgets entre pestañas.
+    """
+    st.markdown('<div class="card-title">Carga del Dossier</div>', unsafe_allow_html=True)
+
+    dossier_file = st.file_uploader(
+        f"Arrastra el Dossier de {tab_label} aquí o haz clic para seleccionarlo",
+        type=["xlsx"],
+        accept_multiple_files=False,
+        label_visibility="collapsed",
+        key=f"uploader_{tab_key}",
     )
 
-st.markdown("<br>", unsafe_allow_html=True)
+    if dossier_file:
+        st.markdown(
+            f'<div class="file-status ok">✓ Dossier cargado — <strong>{dossier_file.name}</strong></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f'<div class="file-status missing">⚠ Sube el Dossier de {tab_label} (.xlsx) para continuar</div>',
+            unsafe_allow_html=True,
+        )
 
-# Fila de botones
-col_start, col_download = st.columns(2)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-with col_start:
-    start_clicked = st.button(
-        "▶  Iniciar proceso completo",
-        disabled=dossier_file is None,
-        type="primary",
-    )
+    col_start, col_download = st.columns(2)
 
-with col_download:
-    download_placeholder = st.empty()
-    if not start_clicked:
-        with download_placeholder:
-            st.button(
-                "⬇ Descargar archivo procesado (.xlsx)",
-                disabled=True,
-                type="primary",
-            )
+    with col_start:
+        start_clicked = st.button(
+            f"▶  Procesar {tab_label}",
+            disabled=dossier_file is None,
+            type="primary",
+            key=f"btn_start_{tab_key}",
+        )
 
-if start_clicked:
-    run_full_process(dossier_file, download_placeholder)
+    with col_download:
+        download_placeholder = st.empty()
+        if not start_clicked:
+            with download_placeholder:
+                st.button(
+                    "⬇ Descargar archivo procesado (.xlsx)",
+                    disabled=True,
+                    type="primary",
+                    key=f"btn_dl_disabled_{tab_key}",
+                )
+
+    if start_clicked:
+        run_full_process(dossier_file, download_placeholder)
+
+
+tab_marca, tab_comp = st.tabs(["🏷️  Marca", "🏢  Competencia"])
+
+with tab_marca:
+    render_dossier_tab("marca", "Marca")
+
+with tab_comp:
+    render_dossier_tab("competencia", "Competencia")
