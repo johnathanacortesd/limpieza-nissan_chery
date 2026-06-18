@@ -501,7 +501,7 @@ def apply_mention_map(df, mention_map):
     return df
 
 # ──────────────────────────────────────────────────────────────────────────────
-# DETECCIÓN DE DUPLICADOS (fusión de ambas apps)
+# DETECCIÓN DE DUPLICADOS
 # ──────────────────────────────────────────────────────────────────────────────
 def _normalize_url_for_dedup(url):
     if not isinstance(url, str):
@@ -514,6 +514,7 @@ def _normalize_url_for_dedup(url):
     return url
 
 def _get_cell_url(val):
+    """Extrae la URL incrustada de una celda (dict {'value':..,'url':..}) o un string plano."""
     if isinstance(val, dict):
         return val.get('url') or ''
     return str(val) if val else ''
@@ -530,107 +531,118 @@ def _title_quality(title):
     if '|' in title:     score -= 5
     return score
 
+def _son_duplicadas(df, a, b):
+    """
+    Determina si las filas con índices a y b (ya garantizado: misma
+    'Menciones - Empresa') son duplicadas entre sí.
+
+    Reglas, en este orden:
+      1. Link (Streaming - Imagen) igual (no vacío)  -> SIEMPRE duplicada,
+         incluso si el Medio es distinto (esto puede "rescatar" un par que
+         de otro modo no lo sería por tener Medio distinto).
+      2. Si el Medio es distinto y no se cumplió la regla 1 -> NO duplicada.
+      3. (Mismo Medio) Radio/Televisión con Hora presente en ambas y distinta
+         -> NO duplicada.
+      4. (Mismo Medio) Título igual / muy similar tras normalizar, dentro de
+         la ventana de fecha permitida -> duplicada.
+      5. (Mismo Medio) Link Nota igual (no vacío), solo para Internet
+         -> duplicada.
+      6. Cualquier otro caso -> NO duplicada.
+    """
+    medio_a = str(df.at[a, 'Medio']).strip().lower()
+    medio_b = str(df.at[b, 'Medio']).strip().lower()
+    same_medio = medio_a == medio_b
+
+    # ── Regla 1: Link (Streaming - Imagen) — aplica con o sin mismo Medio ─────
+    su_a = _normalizar_url(_get_cell_url(df.at[a, 'Link (Streaming - Imagen)']))
+    su_b = _normalizar_url(_get_cell_url(df.at[b, 'Link (Streaming - Imagen)']))
+    if su_a and su_b and su_a == su_b:
+        return True
+
+    # ── Regla 2: Medio distinto y no hubo match de link -> no duplicada ───────
+    if not same_medio:
+        return False
+
+    tipo = str(df.at[a, 'Tipo de Medio'])
+
+    # ── Regla 3: Hora distinta en Radio/Televisión -> no duplicada ────────────
+    if tipo in ('Radio', 'Televisión'):
+        hora_a = str(df.at[a, 'Hora']).strip()
+        hora_b = str(df.at[b, 'Hora']).strip()
+        if hora_a and hora_b and hora_a != hora_b:
+            return False
+
+    # ── Regla 4: Título igual/similar dentro de la ventana de fecha ───────────
+    fa, fb = df.at[a, 'Fecha'], df.at[b, 'Fecha']
+    fecha_ok = True
+    if tipo == 'Internet':
+        if pd.notna(fa) and pd.notna(fb) and abs((fa - fb).days) > 1:
+            fecha_ok = False
+    else:
+        if pd.notna(fa) and pd.notna(fb) and fa.date() != fb.date():
+            fecha_ok = False
+
+    if fecha_ok:
+        ta = normalize_title_for_comparison(df.at[a, 'Título'])
+        tb = normalize_title_for_comparison(df.at[b, 'Título'])
+        if ta and tb:
+            sim = SequenceMatcher(None, ta, tb).ratio()
+            if ta == tb or ta in tb or tb in ta or sim >= SIMILARITY_THRESHOLD_TITULOS:
+                return True
+
+    # ── Regla 5: Link Nota igual, solo Internet ────────────────────────────────
+    if tipo == 'Internet':
+        ln_a = _normalize_url_for_dedup(_get_cell_url(df.at[a, 'Link Nota']))
+        ln_b = _normalize_url_for_dedup(_get_cell_url(df.at[b, 'Link Nota']))
+        if ln_a and ln_b and ln_a == ln_b:
+            return True
+
+    return False
+
 def detect_duplicates(df):
     """
-    Marca duplicados en columna 'is_duplicate'.
-    Reglas por tipo de medio (igual que dossier_utils original).
+    Marca duplicados en la columna 'is_duplicate'. Las filas solo se
+    comparan entre sí cuando comparten 'Menciones - Empresa' (mención
+    distinta nunca puede ser duplicada). El resto de las reglas se evalúan
+    en `_son_duplicadas`.
     """
     df = df.copy().reset_index(drop=True)
-    df['_orig_idx']     = df.index
+    df['_orig_idx']      = df.index
     df['_title_quality'] = df['Título'].apply(_title_quality)
-    df['is_duplicate']  = False
+    df['is_duplicate']   = False
 
-    # Ordenar: mejor calidad primero → queda como original
+    # Ordenar: mejor calidad primero → ese registro queda como "original"
     df.sort_values(
         by=['_title_quality', 'Fecha', '_orig_idx'],
         ascending=[False, True, True],
         inplace=True, na_position='last'
     )
 
-    seen_url      = {}   # (url_norm, mencion) → orig_idx
-    seen_stream   = {}   # (stream_url_norm, mencion) → orig_idx
-    seen_bcast    = {}   # (mencion, medio, hora) → orig_idx
-    title_buckets = defaultdict(list)  # (medio, mencion) → [idx]
+    groups_by_mencion = defaultdict(list)
+    for pos in df.index:
+        mencion = str(df.at[pos, 'Menciones - Empresa']).strip()
+        groups_by_mencion[mencion].append(pos)
 
-    for pos, row in df.iterrows():
-        if df.at[pos, 'is_duplicate']:
-            continue
-
-        tipo    = str(row.get('Tipo de Medio', ''))
-        mencion = str(row.get('Menciones - Empresa', '')).strip()
-        medio   = str(row.get('Medio', '')).strip().lower()
-
-        # ── URL Streaming duplicada ────────────────────────────────────────────
-        stream_url = _get_cell_url(row.get('Link (Streaming - Imagen)'))
-        if stream_url and mencion:
-            sn = _normalizar_url(stream_url)
-            if sn:
-                sk = (sn, mencion)
-                if sk in seen_stream:
-                    df.at[pos, 'is_duplicate'] = True
-                    continue
-                seen_stream[sk] = pos
-
-        if tipo == 'Internet':
-            link_url = _get_cell_url(row.get('Link Nota'))
-            if link_url and mencion:
-                un = _normalize_url_for_dedup(link_url)
-                k  = (un, mencion)
-                if k in seen_url:
-                    df.at[pos, 'is_duplicate'] = True
-                    continue
-                seen_url[k] = pos
-            title_buckets[(medio, mencion)].append(pos)
-
-        elif tipo in ('Radio', 'Televisión'):
-            hora = str(row.get('Hora', '')).strip()
-            if mencion and medio and hora:
-                k = (mencion, medio, hora)
-                if k in seen_bcast:
-                    df.at[pos, 'is_duplicate'] = True
-                    continue
-                seen_bcast[k] = pos
-            else:
-                title_buckets[(medio, mencion)].append(pos)
-
-        else:
-            title_buckets[(medio, mencion)].append(pos)
-
-    # ── Comparación de títulos dentro de cada (medio, mención) ────────────────
-    for idxs in title_buckets.values():
+    for idxs in groups_by_mencion.values():
         if len(idxs) < 2:
             continue
         for i in range(len(idxs)):
+            a = idxs[i]
+            if df.at[a, 'is_duplicate']:
+                continue
             for j in range(i + 1, len(idxs)):
-                a, b = idxs[i], idxs[j]
-                if df.at[a, 'is_duplicate'] or df.at[b, 'is_duplicate']:
+                b = idxs[j]
+                if df.at[b, 'is_duplicate']:
                     continue
-                ta = normalize_title_for_comparison(df.at[a, 'Título'])
-                tb = normalize_title_for_comparison(df.at[b, 'Título'])
-                if not ta or not tb:
-                    continue
-                # Ventana de fecha para Internet
-                tipo_a = str(df.at[a, 'Tipo de Medio'])
-                if tipo_a == 'Internet':
-                    fa = df.at[a, 'Fecha']
-                    fb = df.at[b, 'Fecha']
-                    if pd.notna(fa) and pd.notna(fb) and abs((fa - fb).days) > 1:
-                        continue
-                else:
-                    fa = df.at[a, 'Fecha']
-                    fb = df.at[b, 'Fecha']
-                    if pd.notna(fa) and pd.notna(fb) and fa.date() != fb.date():
-                        continue
 
-                sim = SequenceMatcher(None, ta, tb).ratio()
-                if ta in tb or tb in ta or sim >= SIMILARITY_THRESHOLD_TITULOS:
-                    # Marca el de menor calidad como duplicado
+                if _son_duplicadas(df, a, b):
                     qa = df.at[a, '_title_quality']
                     qb = df.at[b, '_title_quality']
                     if qa >= qb:
                         df.at[b, 'is_duplicate'] = True
                     else:
                         df.at[a, 'is_duplicate'] = True
+                        break  # 'a' ya quedó marcada como duplicada
 
     # Restaurar orden original
     df.sort_values('_orig_idx', inplace=True)
@@ -645,8 +657,9 @@ LABEL_MAP_TONO = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo',
 
 def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar):
     """
-    Aplica los pipelines PKL solo a noticias únicas.
+    Aplica los pipelines PKL solo a noticias únicas (is_duplicate == False).
     Homogeneiza temas por título similar y aplica Mapa_Temas.
+    Las filas duplicadas quedan marcadas como 'Duplicada' / '-'.
     """
     df = df.copy()
     mask_unique = ~df['is_duplicate']
