@@ -157,7 +157,7 @@ FINAL_ORDER = [
     "Región", "Título", "Autor - Conductor", "Nro. Pagina", "Dimensión",
     "Duración - Nro. Caracteres", "CPE", "Tier", "Audiencia", "Tono", "Tema",
     "Temas Generales - Tema", "Resumen - Aclaracion", "Link Nota",
-    "Link (Streaming - Imagen)", "Menciones - Empresa",
+    "Link (Streaming - Imagen)", "Menciones - Empresa", "ID Original Retenido"
 ]
 
 TIPO_MEDIO_MAP = {
@@ -350,7 +350,6 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
                 row_data[h] = None
                 continue
             cell = row[i]
-            # Extrae la URL real como texto plano
             row_data[h] = extract_link_from_cell(cell)
         raw_rows.append(row_data)
 
@@ -496,7 +495,7 @@ def apply_mention_map(df, mention_map):
     return df
 
 # ──────────────────────────────────────────────────────────────────────────────
-# DETECCIÓN DE DUPLICADOS (REGLAS DE NEGOCIO RESTAURADAS)
+# DETECCIÓN DE DUPLICADOS (CON RASTREO DE ID ORIGINAL)
 # ──────────────────────────────────────────────────────────────────────────────
 def calculate_title_quality_score(title: str) -> int:
     if not isinstance(title, str):
@@ -512,15 +511,6 @@ def calculate_title_quality_score(title: str) -> int:
     return int(score)
 
 def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=0.93, date_proximity_days=1) -> bool:
-    """
-    Evalúa estrictamente si dos filas son duplicadas bajo las reglas del negocio:
-    
-    1. Agrupamiento por Medio y Mención previo garantiza correspondencia de empresa y medio.
-    2. Si los enlaces 'Link (Streaming - Imagen)' de ambas filas son válidos y diferentes, NO son duplicados.
-    3. Para Radio y Televisión, si tienen horas cargadas y son diferentes, NO son duplicadas.
-    4. El título normalizado sin comillas ni puntuación evalúa coincidencia directa o similaridad difusa.
-    """
-    # ── Menciones e identificación de Medio (Garantizados por el flujo, pero validados por seguridad) ──
     menc1 = str(row1.get('Menciones - Empresa', '')).strip().lower()
     menc2 = str(row2.get('Menciones - Empresa', '')).strip().lower()
     if menc1 != menc2:
@@ -536,14 +526,12 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
     if tipo1 != tipo2:
         return False
 
-    # ── Regla: Link (Streaming - Imagen) diferente NO es duplicada ──
     url_col = 'Link (Streaming - Imagen)'
     url1 = normalize_url(row1.get(url_col, ''))
     url2 = normalize_url(row2.get(url_col, ''))
     if url1 and url2 and url1 != url2:
         return False
 
-    # ── Ventana temporal ──
     fecha1 = row1.get('Fecha')
     fecha2 = row2.get('Fecha')
     if pd.isna(fecha1) or pd.isna(fecha2):
@@ -559,21 +547,18 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
         if t1.date() != t2.date():
             return False
 
-    # ── Regla: Hora diferente en Radio/TV NO es duplicada ──
     if tipo1 in ['Radio', 'Televisión']:
         hora1 = str(row1.get('Hora', '')).strip()
         hora2 = str(row2.get('Hora', '')).strip()
         if hora1 and hora2 and hora1 != hora2:
             return False
 
-    # ── Regla: Mismo link de nota en Internet es duplicada directa ──
     if tipo1 == 'Internet':
         link_nota_1 = normalize_url(row1.get('Link Nota', ''))
         link_nota_2 = normalize_url(row2.get('Link Nota', ''))
         if link_nota_1 and link_nota_2 and link_nota_1 == link_nota_2:
             return True
 
-    # ── Comparación de Títulos (Normalización elimina comillas y caracteres especiales) ──
     titulo1 = normalize_title_for_comparison(row1.get('Título', ''))
     titulo2 = normalize_title_for_comparison(row2.get('Título', ''))
 
@@ -583,12 +568,10 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
     if titulo1 == titulo2:
         return True
 
-    # Substring para cadenas largas
     if len(titulo1) > 15 and len(titulo2) > 15:
         if titulo1 in titulo2 or titulo2 in titulo1:
             return True
 
-    # Similaridad difusa
     similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
     if similarity >= title_similarity_threshold:
         return True
@@ -596,15 +579,10 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
     return False
 
 def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Detecta registros duplicados agrupando por 'Medio' y 'Menciones - Empresa'.
-    El de mayor calidad de título se conserva como original.
-    """
     df = df.copy().reset_index(drop=True)
     df['original_index'] = df.index
     df['title_quality']  = df['Título'].apply(calculate_title_quality_score)
 
-    # Ordenar por calidad descendente, asegurando conservar el mejor
     df.sort_values(
         by=['title_quality', 'Fecha', 'original_index'],
         ascending=[False, True, True],
@@ -613,6 +591,7 @@ def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     duplicate_indices = set()
+    duplicate_to_original_id = {}
     grouping_keys     = ['Medio', 'Menciones - Empresa']
 
     for _, group in df.groupby(grouping_keys, dropna=False):
@@ -623,20 +602,26 @@ def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 
         for i in range(len(group_rows)):
             current = group_rows[i]
-            if current['original_index'] in duplicate_indices:
+            current_orig_idx = current['original_index']
+            if current_orig_idx in duplicate_indices:
                 continue
 
             for j in range(i + 1, len(group_rows)):
                 compare = group_rows[j]
-                if compare['original_index'] in duplicate_indices:
+                compare_orig_idx = compare['original_index']
+                if compare_orig_idx in duplicate_indices:
                     continue
 
                 if are_duplicates(pd.Series(current), pd.Series(compare), title_similarity_threshold=SIMILARITY_THRESHOLD_TITULOS):
-                    duplicate_indices.add(compare['original_index'])
+                    duplicate_indices.add(compare_orig_idx)
+                    # Registra el ID Noticia del registro original retenido
+                    duplicate_to_original_id[compare_orig_idx] = current.get('ID Noticia')
 
     df['is_duplicate'] = df['original_index'].isin(duplicate_indices)
+    
+    # Asigna el ID del registro retenido únicamente para las duplicadas
+    df['ID Original Retenido'] = df['original_index'].map(duplicate_to_original_id)
 
-    # Restaurar orden original y eliminar columnas de control
     df.sort_values('original_index', inplace=True)
     df.drop(columns=['original_index', 'title_quality'], inplace=True)
     return df.reset_index(drop=True)
@@ -670,14 +655,12 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
     df_valid['_resumen_procesado'] = df_valid['_texto_ia'].apply(preprocess_text_for_topic)
     df_valid['Temas Generales - Tema'] = topic_pipeline.predict(df_valid['_resumen_procesado'])
 
-    # Homogeneización de temas por título normalizado
     df_valid['_titulo_norm'] = df_valid['Título'].apply(normalize_title_for_comparison)
     homo = df_valid.groupby('_titulo_norm')['Temas Generales - Tema'].transform(
         lambda x: x.mode()[0] if not x.mode().empty else x
     )
     df_valid['Temas Generales - Tema'] = homo
 
-    # Mapa_Temas
     df_valid['Tema'] = (
         df_valid['Temas Generales - Tema'].astype(str).str.strip()
         .map(final_topic_map)
@@ -686,10 +669,8 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 
     df_valid.drop(columns=['_texto_ia', '_resumen_procesado', '_titulo_norm'], inplace=True)
 
-    # Volcar a df original
     df.update(df_valid[['Tono', 'Temas Generales - Tema', 'Tema']])
 
-    # Marcar duplicadas
     mask_dup = df['is_duplicate']
     if mask_dup.any():
         df.loc[mask_dup, 'Tono']                    = 'Duplicada'
@@ -715,8 +696,10 @@ def to_excel(df):
     date_fmt    = 'DD/MM/YYYY'
     num_fmt_int = '#,##0'
 
-    NUM_COLS = {'ID Noticia', 'Nro. Pagina', 'Dimensión', 'Duración - Nro. Caracteres',
-                'CPE', 'Tier', 'Audiencia'}
+    NUM_COLS = {
+        'ID Noticia', 'Nro. Pagina', 'Dimensión', 'Duración - Nro. Caracteres',
+        'CPE', 'Tier', 'Audiencia', 'ID Original Retenido'
+    }
 
     ws.append(cols)
     for i, col_name in enumerate(cols, start=1):
@@ -724,7 +707,7 @@ def to_excel(df):
 
     for _, row in df_out.iterrows():
         out_row = []
-        link_map = {}  # col_idx → url
+        link_map = {}
 
         for ci, col_name in enumerate(cols, start=1):
             val = row[col_name]
