@@ -223,7 +223,7 @@ def load_config(_path):
     return region_map, internet_map, mention_map, final_topic_map
 
 # ──────────────────────────────────────────────────────────────────────────────
-# UTILIDADES DE TEXTO
+# UTILIDADES DE TEXTO Y NÚMEROS
 # ──────────────────────────────────────────────────────────────────────────────
 def convert_html_entities(text):
     if not isinstance(text, str):
@@ -301,20 +301,63 @@ def preprocess_text_for_topic(text):
     return " ".join(t for t in tokens if t not in stop_words)
 
 def parse_numeric(val):
+    """
+    Parsea de forma exacta los valores numéricos sin aproximar. 
+    Mantiene la precisión de decimales originales si existen, resolviendo de forma segura 
+    los separadores de miles y decimales de diferentes regiones.
+    """
     if val is None:
         return None
     if isinstance(val, (int, float)):
-        if isinstance(val, float) and val.is_integer():
-            return int(val)
         return val
     s = str(val).strip()
     if not s:
         return None
-    try:
-        if ',' in s and '.' not in s:
+    
+    # Limpieza de caracteres comunes de moneda y espacios
+    s = s.replace('$', '').replace(' ', '')
+    
+    # Si no tiene puntos ni comas, es un número entero simple
+    if '.' not in s and ',' not in s:
+        try:
+            f = float(s)
+            return int(f) if f.is_integer() else f
+        except ValueError:
+            return None
+            
+    # Si contiene tanto puntos como comas
+    if ',' in s and '.' in s:
+        if s.rfind(',') > s.rfind('.'):
+            # Formato latino/europeo: 1.234,56 -> 1234.56
+            s = s.replace('.', '').replace(',', '.')
+        else:
+            # Formato anglosajón: 1,234.56 -> 1234.56
+            s = s.replace(',', '')
+    elif ',' in s:
+        # Solo tiene comas
+        if s.count(',') > 1:
+            s = s.replace(',', '')
+        else:
+            # Una sola coma. Ej: "1,234" (miles) o "12,34" (decimal)
             parts = s.split(',')
-            s = s.replace(',', '') if len(parts[-1]) == 3 else s.replace(',', '.')
-        f = float(s.replace(',', ''))
+            if len(parts[-1]) == 3: 
+                s = s.replace(',', '')
+            else: 
+                s = s.replace(',', '.')
+    elif '.' in s:
+        # Solo tiene puntos
+        if s.count('.') > 1:
+            s = s.replace('.', '')
+        else:
+            # Un solo punto. Ej: "1.234" (miles) o "12.34" (decimal)
+            parts = s.split('.')
+            if len(parts[-1]) == 3: 
+                s = s.replace('.', '')
+            else:
+                pass # Se mantiene el punto decimal estándar
+                
+    try:
+        f = float(s)
         return int(f) if f.is_integer() else f
     except ValueError:
         return None
@@ -575,7 +618,7 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
         if titulo1 in titulo2 or titulo2 in titulo1:
             return True
 
-    similarity = SequenceMatcher(None, Pattern:=titulo1, titulo2).ratio()
+    similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
     if similarity >= title_similarity_threshold:
         return True
 
@@ -724,6 +767,7 @@ def to_excel(df):
                     cv = None
 
             elif col_name in NUM_COLS:
+                # parse_numeric mantiene la precisión real (ej. flotantes con decimales)
                 cv = parse_numeric(val)
 
             elif col_name in ('Link Nota', 'Link (Streaming - Imagen)'):
@@ -743,7 +787,7 @@ def to_excel(df):
         ws.append(out_row)
         cur_row = ws.max_row
 
-        # Aplicar formatos numéricos, de fecha y estilos específicos de celda
+        # Aplicar formatos numéricos, de fecha y estilos específicos de celda sin alterar el valor nativo
         for ci, col_name in enumerate(cols, start=1):
             cell = ws.cell(row=cur_row, column=ci)
 
@@ -752,7 +796,7 @@ def to_excel(df):
                 if isinstance(cell.value, (datetime.datetime, datetime.date)):
                     cell.number_format = date_fmt
 
-            # Formato numérico para campos seleccionados
+            # Formato visual numérico nativo de Excel (conservando la precisión exacta por detrás)
             elif cell.value is not None and isinstance(cell.value, (int, float)):
                 if col_name in ('Nro. Pagina', 'Dimensión', 'Duración - Nro. Caracteres', 'Tier', 'Audiencia'):
                     cell.number_format = fmt_thousands
