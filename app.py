@@ -444,6 +444,9 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
 
         # Link Nota
         if av_row:
+            # Reemplazar dominio .com.ar por .com.co para medios audiovisuales (Radio/Televisión)
+            if raw_val_av and "news.globalnews.com.ar" in raw_val_av:
+                raw_val_av = raw_val_av.replace("news.globalnews.com.ar", "news.globalnews.com.co")
             link_nota_final.append(raw_val_av if raw_val_av else None)
         else:
             link_nota_final.append(raw_val_str if raw_val_str else None)
