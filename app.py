@@ -575,7 +575,7 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
         if titulo1 in titulo2 or titulo2 in titulo1:
             return True
 
-    similarity = SequenceMatcher(None, titulo1, titulo2).ratio()
+    similarity = SequenceMatcher(None, Pattern:=titulo1, titulo2).ratio()
     if similarity >= title_similarity_threshold:
         return True
 
@@ -693,7 +693,8 @@ def to_excel(df):
     ws  = wb.active
     ws.title = 'Resultado'
 
-    font_link     = Font(color='0563C1', underline='single')
+    # Se define font_link en negro y sin subrayado
+    font_link     = Font(color='000000', underline=None)
     font_header   = Font(bold=True)
     align_left    = Alignment(horizontal='left')
     date_fmt      = 'DD/MM/YYYY'
