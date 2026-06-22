@@ -693,11 +693,12 @@ def to_excel(df):
     ws  = wb.active
     ws.title = 'Resultado'
 
-    font_link   = Font(color='0563C1', underline='single')
-    font_header = Font(bold=True)
-    align_left  = Alignment(horizontal='left')
-    date_fmt    = 'DD/MM/YYYY'
-    num_fmt_int = '#,##0'
+    font_link     = Font(color='0563C1', underline='single')
+    font_header   = Font(bold=True)
+    align_left    = Alignment(horizontal='left')
+    date_fmt      = 'DD/MM/YYYY'
+    fmt_thousands = '#,##0'
+    fmt_currency  = '"$"#,##0'
 
     NUM_COLS = {
         'ID Noticia', 'Nro. Pagina', 'Dimensión', 'Duración - Nro. Caracteres',
@@ -741,21 +742,21 @@ def to_excel(df):
         ws.append(out_row)
         cur_row = ws.max_row
 
-        # Fecha
-        date_idx = cols.index('Fecha') + 1 if 'Fecha' in cols else None
-        if date_idx:
-            cell = ws.cell(row=cur_row, column=date_idx)
-            if isinstance(cell.value, (datetime.datetime, datetime.date)):
-                cell.number_format = date_fmt
+        # Aplicar formatos numéricos, de fecha y estilos específicos de celda
+        for ci, col_name in enumerate(cols, start=1):
+            cell = ws.cell(row=cur_row, column=ci)
 
-        # CPE sin notación científica para AV
-        if 'CPE' in cols and 'Tipo de Medio' in cols:
-            cpe_idx  = cols.index('CPE') + 1
-            tipo_idx = cols.index('Tipo de Medio') + 1
-            tipo_val = ws.cell(row=cur_row, column=tipo_idx).value
-            cpe_cell = ws.cell(row=cur_row, column=cpe_idx)
-            if tipo_val in ('Radio', 'Televisión') and isinstance(cpe_cell.value, (int, float)):
-                cpe_cell.number_format = num_fmt_int
+            # Formato de Fecha
+            if col_name == 'Fecha':
+                if isinstance(cell.value, (datetime.datetime, datetime.date)):
+                    cell.number_format = date_fmt
+
+            # Formato numérico para campos seleccionados
+            elif cell.value is not None and isinstance(cell.value, (int, float)):
+                if col_name in ('Nro. Pagina', 'Dimensión', 'Duración - Nro. Caracteres', 'Tier', 'Audiencia'):
+                    cell.number_format = fmt_thousands
+                elif col_name == 'CPE':
+                    cell.number_format = fmt_currency
 
         # Hipervínculos
         for ci, url in link_map.items():
