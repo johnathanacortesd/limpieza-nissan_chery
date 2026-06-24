@@ -212,10 +212,16 @@ def load_config(_path):
         sheets['Internet'].iloc[:, 1].values,
         index=sheets['Internet'].iloc[:, 0].astype(str).str.lower().str.strip()
     ).to_dict()
-    mention_map = pd.Series(
-        sheets['Menciones'].iloc[:, 1].values,
-        index=sheets['Menciones'].iloc[:, 0].astype(str).str.strip()
-    ).to_dict()
+    
+    # Se genera un diccionario con claves normalizadas de forma estricta
+    mention_df = sheets['Menciones']
+    mention_map = {}
+    for _, row in mention_df.iterrows():
+        key = row.iloc[0]
+        val = row.iloc[1]
+        if pd.notna(key) and pd.notna(val):
+            mention_map[normalize_key(str(key))] = str(val).strip()
+
     final_topic_map = pd.Series(
         sheets['Mapa_Temas'].iloc[:, 1].values,
         index=sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()
@@ -225,6 +231,21 @@ def load_config(_path):
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILIDADES DE TEXTO Y NÚMEROS
 # ──────────────────────────────────────────────────────────────────────────────
+def normalize_key(s):
+    """
+    Normaliza de manera estricta cadenas de texto utilizadas como claves de búsqueda.
+    Elimina variaciones de mayúsculas, espacios adicionales (incluyendo non-breaking spaces)
+    y estandariza los diferentes tipos de guiones.
+    """
+    if not isinstance(s, str):
+        return ""
+    s = html.unescape(s)
+    # Reemplazar guiones especiales (en-dash \u2013, em-dash \u2014, etc.) por guion estándar
+    s = re.sub(r'[\u2010-\u2015\u2212]', '-', s)
+    # Reemplazar múltiples espacios y espacios de no-ruptura (\xa0) por un único espacio común
+    s = re.sub(r'\s+', ' ', s)
+    return s.lower().strip()
+
 def convert_html_entities(text):
     if not isinstance(text, str):
         return text
@@ -532,11 +553,13 @@ def expand_menciones(df):
 # MAPEO DE MENCIONES
 # ──────────────────────────────────────────────────────────────────────────────
 def apply_mention_map(df, mention_map):
+    """
+    Aplica el mapeo a la columna Menciones - Empresa de manera flexible,
+    evaluando la versión normalizada del texto para evitar fallos por espacios o guiones.
+    """
     if 'Menciones - Empresa' in df.columns:
-        df['Menciones - Empresa'] = (
-            df['Menciones - Empresa'].astype(str).str.strip()
-            .map(mention_map)
-            .fillna(df['Menciones - Empresa'])
+        df['Menciones - Empresa'] = df['Menciones - Empresa'].apply(
+            lambda x: mention_map.get(normalize_key(str(x)), str(x).strip()) if pd.notna(x) and str(x).strip() != '' else x
         )
     return df
 
