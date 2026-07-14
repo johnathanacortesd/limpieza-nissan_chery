@@ -212,7 +212,7 @@ def load_config(_path):
         sheets['Internet'].iloc[:, 1].values,
         index=sheets['Internet'].iloc[:, 0].astype(str).str.lower().str.strip()
     ).to_dict()
-    
+
     # Se genera un diccionario con claves normalizadas de forma estricta
     mention_df = sheets['Menciones']
     mention_map = {}
@@ -245,6 +245,28 @@ def normalize_key(s):
     # Reemplazar múltiples espacios y espacios de no-ruptura (\xa0) por un único espacio común
     s = re.sub(r'\s+', ' ', s)
     return s.lower().strip()
+
+
+def get_col(df, *names, default=''):
+    """
+    FIX / ROBUSTEZ: busca una columna del DataFrame probando varios nombres
+    candidatos, de forma flexible (ignorando mayúsculas/minúsculas, espacios
+    extra, \\xa0, y variaciones de guiones vía normalize_key).
+
+    Esto evita que un encabezado del Excel de entrada con una capitalización,
+    un espacio, o un punto distinto (ej. "Empresa rel." vs "Empresa Rel ")
+    haga que df.get(...) no encuentre la columna y devuelva silenciosamente
+    una serie vacía por defecto (el bug de "Menciones - Empresa" venía de acá).
+    """
+    normalized_cols = {normalize_key(c): c for c in df.columns}
+    for name in names:
+        if name in df.columns:
+            return df[name]
+        key = normalize_key(name)
+        if key in normalized_cols:
+            return df[normalized_cols[key]]
+    return pd.Series([default] * len(df), index=df.index)
+
 
 def convert_html_entities(text):
     if not isinstance(text, str):
@@ -334,10 +356,10 @@ def parse_numeric(val):
     s = str(val).strip()
     if not s:
         return None
-    
+
     # Limpieza de caracteres comunes de moneda y espacios
     s = s.replace('$', '').replace(' ', '')
-    
+
     # Si no tiene puntos ni comas, es un número entero simple
     if '.' not in s and ',' not in s:
         try:
@@ -345,7 +367,7 @@ def parse_numeric(val):
             return int(f) if f.is_integer() else f
         except ValueError:
             return None
-            
+
     # Si contiene tanto puntos como comas
     if ',' in s and '.' in s:
         if s.rfind(',') > s.rfind('.'):
@@ -376,7 +398,7 @@ def parse_numeric(val):
                 s = s.replace('.', '')
             else:
                 pass # Se mantiene el punto decimal estándar
-                
+
     try:
         f = float(s)
         return int(f) if f.is_integer() else f
@@ -476,8 +498,10 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     df.loc[is_av, 'Duración - Nro. Caracteres'] = 0
 
     # ── CPE ────────────────────────────────────────────────────────────────────
-    cpe_av      = df.get('CPE',          pd.Series([np.nan] * len(df)))
-    cpe_grafica = df.get('Valor de Nota', pd.Series([np.nan] * len(df)))
+    # FIX: búsqueda flexible de columna (antes df.get exacto podía fallar por
+    # diferencias de mayúsculas/espacios en el encabezado de origen)
+    cpe_av      = get_col(df, 'CPE', default=np.nan)
+    cpe_grafica = get_col(df, 'Valor de Nota', default=np.nan)
     df['CPE']   = np.where(is_av, cpe_av, np.where(is_grafica, cpe_grafica, np.nan))
 
     df['Tier']     = df.get('Tier',     pd.Series(dtype=str))
@@ -492,9 +516,21 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     df['Resumen - Aclaracion'] = cuerpo_cleaned.apply(corregir_resumen)
 
     # ── Links ──────────────────────────────────────────────────────────────────
-    url_nota_av    = df.get('URL Nota AV',            df.get('Link Nota AV',   pd.Series([''] * len(df))))
-    url_streaming  = df.get('URL (Streaming - Imagen)', pd.Series([''] * len(df)))
-    url_nota_raw   = df.get('URL Nota',                pd.Series([''] * len(df)))
+    # Fuente para "Link Nota":
+    #   - Medios AV (AM/FM/Aire/Cable/Radio/Televisión) -> columna "URL Nota AV"
+    #     (o "Link Nota AV"), reemplazando el dominio .com.ar por .com.co
+    #   - Medios gráficos (Internet/Prensa/Revistas, es decir Diario/Online/Revista)
+    #     -> columna "URL (Streaming - Imagen)"
+    #
+    # Fuente para "Link (Streaming - Imagen)" (solo aplica a Internet/Online):
+    #   - columna "Link Nota" del archivo de entrada, que ya trae el hipervínculo
+    #     incrustado en la celda (extract_link_from_cell ya extrajo la URL real).
+    #
+    # FIX PRINCIPAL: antes se leía por error de una columna "URL Nota" que no es
+    # la fuente correcta; el dato real está en la columna de entrada "Link Nota".
+    url_nota_av    = get_col(df, 'URL Nota AV', 'Link Nota AV', default='')
+    url_streaming  = get_col(df, 'URL (Streaming - Imagen)', default='')
+    url_nota_raw   = get_col(df, 'Link Nota', default='')  # FIX: era 'URL Nota'
 
     link_nota_final    = []
     link_stream_final  = []
@@ -525,8 +561,11 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     df['Link (Streaming - Imagen)'] = link_stream_final
 
     # ── Menciones ──────────────────────────────────────────────────────────────
-    menciones_av      = df.get('Menciones - Empresa', pd.Series([''] * len(df))).fillna('').astype(str).apply(clean_text)
-    menciones_grafica = df.get('Empresa rel.',        pd.Series([''] * len(df))).fillna('').astype(str).apply(clean_text)
+    # FIX: uso de get_col (búsqueda flexible de encabezado) en lugar de df.get
+    # exacto, para que "Empresa rel." se encuentre aunque el encabezado real
+    # tenga mayúsculas, un espacio extra, o un punto distinto.
+    menciones_av      = get_col(df, 'Menciones - Empresa', default='').fillna('').astype(str).apply(clean_text)
+    menciones_grafica = get_col(df, 'Empresa rel.', 'Empresa Rel.', 'Empresa Relacionada', default='').fillna('').astype(str).apply(clean_text)
     df['Menciones - Empresa'] = np.where(is_av, menciones_av, np.where(is_grafica, menciones_grafica, menciones_av))
 
     return df
@@ -687,7 +726,7 @@ def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
                     duplicate_to_original_id[compare_orig_idx] = current.get('ID Noticia')
 
     df['is_duplicate'] = df['original_index'].isin(duplicate_indices)
-    
+
     # Asigna el ID del registro retenido únicamente para las duplicadas
     df['ID Original Retenido'] = df['original_index'].map(duplicate_to_original_id)
 
