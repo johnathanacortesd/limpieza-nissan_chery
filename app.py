@@ -25,7 +25,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght=300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
 
     html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     .stApp { background-color: #F7F9F8; }
@@ -187,77 +187,67 @@ def load_ml_models():
         st.stop()
 
 # ──────────────────────────────────────────────────────────────────────────────
-# CARGA AUTOMÁTICA DE Configuracion.xlsx
+# CARGA AUTOMÁTICA DESDE GOOGLE SHEETS
 # ──────────────────────────────────────────────────────────────────────────────
-def _find_config_file():
-    candidates = ["Configuracion.xlsx", "configuracion.xlsx", "Config.xlsx", "config.xlsx"]
-    for name in candidates:
-        p = Path(name)
-        if p.exists():
-            return p
-    base = Path(__file__).parent
-    for f in base.iterdir():
-        if f.suffix.lower() == '.xlsx' and 'config' in f.stem.lower():
-            return f
-    return None
-
 @st.cache_data
-def load_config(_path):
-    sheets = pd.read_excel(_path, sheet_name=None, engine='openpyxl')
+def load_config_from_sheets():
+    """
+    Obtiene las URLs publicadas en formato CSV desde st.secrets de Streamlit
+    y construye los diccionarios de mapeo equivalentes a Configuracion.xlsx.
+    """
+    try:
+        regiones_url = st.secrets["REGIONES_CSV_URL"]
+        internet_url = st.secrets["INTERNET_CSV_URL"]
+        menciones_url = st.secrets["MENCIONES_CSV_URL"]
+        mapa_temas_url = st.secrets["MAPA_TEMAS_CSV_URL"]
+    except KeyError as e:
+        st.error(f"Falta configurar el secreto `{e.args[0]}` en los Secrets de Streamlit.")
+        st.stop()
+
+    # Lectura de los CSV remotos
+    df_regiones = pd.read_csv(regiones_url)
+    df_internet = pd.read_csv(internet_url)
+    df_menciones = pd.read_csv(menciones_url)
+    df_mapa_temas = pd.read_csv(mapa_temas_url)
+
+    # Construcción de mapas
     region_map = pd.Series(
-        sheets['Regiones'].iloc[:, 1].values,
-        index=sheets['Regiones'].iloc[:, 0].astype(str).str.lower().str.strip()
-    ).to_dict()
-    internet_map = pd.Series(
-        sheets['Internet'].iloc[:, 1].values,
-        index=sheets['Internet'].iloc[:, 0].astype(str).str.lower().str.strip()
+        df_regiones.iloc[:, 1].values,
+        index=df_regiones.iloc[:, 0].astype(str).str.lower().str.strip()
     ).to_dict()
 
-    # Se genera un diccionario con claves normalizadas de forma estricta
-    mention_df = sheets['Menciones']
+    internet_map = pd.Series(
+        df_internet.iloc[:, 1].values,
+        index=df_internet.iloc[:, 0].astype(str).str.lower().str.strip()
+    ).to_dict()
+
     mention_map = {}
-    for _, row in mention_df.iterrows():
+    for _, row in df_menciones.iterrows():
         key = row.iloc[0]
         val = row.iloc[1]
         if pd.notna(key) and pd.notna(val):
             mention_map[normalize_key(str(key))] = str(val).strip()
 
     final_topic_map = pd.Series(
-        sheets['Mapa_Temas'].iloc[:, 1].values,
-        index=sheets['Mapa_Temas'].iloc[:, 0].astype(str).str.strip()
+        df_mapa_temas.iloc[:, 1].values,
+        index=df_mapa_temas.iloc[:, 0].astype(str).str.strip()
     ).to_dict()
+
     return region_map, internet_map, mention_map, final_topic_map
 
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILIDADES DE TEXTO Y NÚMEROS
 # ──────────────────────────────────────────────────────────────────────────────
 def normalize_key(s):
-    """
-    Normaliza de manera estricta cadenas de texto utilizadas como claves de búsqueda.
-    Elimina variaciones de mayúsculas, espacios adicionales (incluyendo non-breaking spaces)
-    y estandariza los diferentes tipos de guiones.
-    """
     if not isinstance(s, str):
         return ""
     s = html.unescape(s)
-    # Reemplazar guiones especiales (en-dash \u2013, em-dash \u2014, etc.) por guion estándar
     s = re.sub(r'[\u2010-\u2015\u2212]', '-', s)
-    # Reemplazar múltiples espacios y espacios de no-ruptura (\xa0) por un único espacio común
     s = re.sub(r'\s+', ' ', s)
     return s.lower().strip()
 
 
 def get_col(df, *names, default=''):
-    """
-    FIX / ROBUSTEZ: busca una columna del DataFrame probando varios nombres
-    candidatos, de forma flexible (ignorando mayúsculas/minúsculas, espacios
-    extra, \\xa0, y variaciones de guiones vía normalize_key).
-
-    Esto evita que un encabezado del Excel de entrada con una capitalización,
-    un espacio, o un punto distinto (ej. "Empresa rel." vs "Empresa Rel ")
-    haga que df.get(...) no encuentre la columna y devuelva silenciosamente
-    una serie vacía por defecto (el bug de "Menciones - Empresa" venía de acá).
-    """
     normalized_cols = {normalize_key(c): c for c in df.columns}
     for name in names:
         if name in df.columns:
@@ -344,11 +334,6 @@ def preprocess_text_for_topic(text):
     return " ".join(t for t in tokens if t not in stop_words)
 
 def parse_numeric(val):
-    """
-    Parsea de forma exacta los valores numéricos sin aproximar. 
-    Mantiene la precisión de decimales originales si existen, resolviendo de forma segura 
-    los separadores de miles y decimales de diferentes regiones.
-    """
     if val is None:
         return None
     if isinstance(val, (int, float)):
@@ -357,10 +342,8 @@ def parse_numeric(val):
     if not s:
         return None
 
-    # Limpieza de caracteres comunes de moneda y espacios
     s = s.replace('$', '').replace(' ', '')
 
-    # Si no tiene puntos ni comas, es un número entero simple
     if '.' not in s and ',' not in s:
         try:
             f = float(s)
@@ -368,36 +351,29 @@ def parse_numeric(val):
         except ValueError:
             return None
 
-    # Si contiene tanto puntos como comas
     if ',' in s and '.' in s:
         if s.rfind(',') > s.rfind('.'):
-            # Formato latino/europeo: 1.234,56 -> 1234.56
             s = s.replace('.', '').replace(',', '.')
         else:
-            # Formato anglosajón: 1,234.56 -> 1234.56
             s = s.replace(',', '')
     elif ',' in s:
-        # Solo tiene comas
         if s.count(',') > 1:
             s = s.replace(',', '')
         else:
-            # Una sola coma. Ej: "1,234" (miles) o "12,34" (decimal)
             parts = s.split(',')
             if len(parts[-1]) == 3: 
                 s = s.replace(',', '')
             else: 
                 s = s.replace(',', '.')
     elif '.' in s:
-        # Solo tiene puntos
         if s.count('.') > 1:
             s = s.replace('.', '')
         else:
-            # Un solo punto. Ej: "1.234" (miles) o "12.34" (decimal)
             parts = s.split('.')
             if len(parts[-1]) == 3: 
                 s = s.replace('.', '')
             else:
-                pass # Se mantiene el punto decimal estándar
+                pass
 
     try:
         f = float(s)
@@ -441,7 +417,6 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
 
     df = pd.DataFrame(raw_rows)
 
-    # ── Tipo de Medio ──────────────────────────────────────────────────────────
     if 'Tipo de Medio' in df.columns:
         df['Tipo de Medio'] = (
             df['Tipo de Medio'].astype(str).str.lower().str.strip()
@@ -457,7 +432,6 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     is_print    = df['Tipo de Medio'].isin(['Prensa', 'Revistas'])
     is_bcast    = df['Tipo de Medio'].isin(['Radio', 'Televisión'])
 
-    # ── Región ────────────────────────────────────────────────────────
     if 'Medio' in df.columns:
         df['Región'] = (
             df['Medio'].astype(str).str.lower().str.strip()
@@ -468,7 +442,6 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
         df['Medio'] = 'N/A'
         df['Región'] = 'N/A'
 
-    # ── Mapeo internet sobre Medio ─────────────────────────────────────────────
     if 'Medio' in df.columns:
         df.loc[is_internet, 'Medio'] = (
             df.loc[is_internet, 'Medio']
@@ -477,7 +450,6 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
             .fillna(df.loc[is_internet, 'Medio'])
         )
 
-    # ── Campos de identidad / texto ────────────────────────────────────────────
     df['ID Noticia']         = df.get('NoticiaId', df.get('ID Noticia', pd.Series(dtype=str)))
     df['Fecha']              = pd.to_datetime(df.get('Fecha', pd.Series(dtype=str)), dayfirst=True, errors='coerce').dt.normalize()
     df['Hora']               = df.get('Hora', pd.Series(dtype=str))
@@ -493,13 +465,9 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     df['Dimensión']               = df.get(dim_col, pd.Series(dtype=str))
     df['Duración - Nro. Caracteres'] = df.get('Duración - Nro. Caracteres', pd.Series(dtype=str))
 
-    # ── Dimensión ↔ Duración para AV ──────────────────────────────────────────
     df.loc[is_av, 'Dimensión']                 = df.loc[is_av, 'Duración - Nro. Caracteres']
     df.loc[is_av, 'Duración - Nro. Caracteres'] = 0
 
-    # ── CPE ────────────────────────────────────────────────────────────────────
-    # FIX: búsqueda flexible de columna (antes df.get exacto podía fallar por
-    # diferencias de mayúsculas/espacios en el encabezado de origen)
     cpe_av      = get_col(df, 'CPE', default=np.nan)
     cpe_grafica = get_col(df, 'Valor de Nota', default=np.nan)
     df['CPE']   = np.where(is_av, cpe_av, np.where(is_grafica, cpe_grafica, np.nan))
@@ -510,27 +478,13 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     df['Tema']     = ''
     df['Temas Generales - Tema'] = ''
 
-    # ── Resumen ────────────────────────────────────────────────────────────────
     cuerpo_col = 'CuerpoEs' if 'CuerpoEs' in df.columns else 'Resumen - Aclaracion'
     cuerpo_cleaned = df.get(cuerpo_col, pd.Series([''] * len(df))).astype(str).apply(clean_cuerpo)
     df['Resumen - Aclaracion'] = cuerpo_cleaned.apply(corregir_resumen)
 
-    # ── Links ──────────────────────────────────────────────────────────────────
-    # Fuente para "Link Nota":
-    #   - Medios AV (AM/FM/Aire/Cable/Radio/Televisión) -> columna "URL Nota AV"
-    #     (o "Link Nota AV"), reemplazando el dominio .com.ar por .com.co
-    #   - Medios gráficos (Internet/Prensa/Revistas, es decir Diario/Online/Revista)
-    #     -> columna "URL (Streaming - Imagen)"
-    #
-    # Fuente para "Link (Streaming - Imagen)" (solo aplica a Internet/Online):
-    #   - columna "Link Nota" del archivo de entrada, que ya trae el hipervínculo
-    #     incrustado en la celda (extract_link_from_cell ya extrajo la URL real).
-    #
-    # FIX PRINCIPAL: antes se leía por error de una columna "URL Nota" que no es
-    # la fuente correcta; el dato real está en la columna de entrada "Link Nota".
     url_nota_av    = get_col(df, 'URL Nota AV', 'Link Nota AV', default='')
     url_streaming  = get_col(df, 'URL (Streaming - Imagen)', default='')
-    url_nota_raw   = get_col(df, 'Link Nota', default='')  # FIX: era 'URL Nota'
+    url_nota_raw   = get_col(df, 'Link Nota', default='')
 
     link_nota_final    = []
     link_stream_final  = []
@@ -542,16 +496,13 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
         raw_val_str = str(val_str).strip() if pd.notna(val_str) else ""
         raw_val_url_nota = str(val_url_nota).strip() if pd.notna(val_url_nota) else ""
 
-        # Link Nota
         if av_row:
-            # Reemplazar dominio .com.ar por .com.co para medios audiovisuales (Radio/Televisión)
             if raw_val_av and "news.globalnews.com.ar" in raw_val_av:
                 raw_val_av = raw_val_av.replace("news.globalnews.com.ar", "news.globalnews.com.co")
             link_nota_final.append(raw_val_av if raw_val_av else None)
         else:
             link_nota_final.append(raw_val_str if raw_val_str else None)
 
-        # Link (Streaming - Imagen) — solo Internet
         if int_row:
             link_stream_final.append(raw_val_url_nota if raw_val_url_nota else None)
         else:
@@ -560,10 +511,6 @@ def read_and_normalize_dossier(wb_sheet, region_map, internet_map):
     df['Link Nota']                = link_nota_final
     df['Link (Streaming - Imagen)'] = link_stream_final
 
-    # ── Menciones ──────────────────────────────────────────────────────────────
-    # FIX: uso de get_col (búsqueda flexible de encabezado) en lugar de df.get
-    # exacto, para que "Empresa rel." se encuentre aunque el encabezado real
-    # tenga mayúsculas, un espacio extra, o un punto distinto.
     menciones_av      = get_col(df, 'Menciones - Empresa', default='').fillna('').astype(str).apply(clean_text)
     menciones_grafica = get_col(df, 'Empresa rel.', 'Empresa Rel.', 'Empresa Relacionada', default='').fillna('').astype(str).apply(clean_text)
     df['Menciones - Empresa'] = np.where(is_av, menciones_av, np.where(is_grafica, menciones_grafica, menciones_av))
@@ -592,10 +539,6 @@ def expand_menciones(df):
 # MAPEO DE MENCIONES
 # ──────────────────────────────────────────────────────────────────────────────
 def apply_mention_map(df, mention_map):
-    """
-    Aplica el mapeo a la columna Menciones - Empresa de manera flexible,
-    evaluando la versión normalizada del texto para evitar fallos por espacios o guiones.
-    """
     if 'Menciones - Empresa' in df.columns:
         df['Menciones - Empresa'] = df['Menciones - Empresa'].apply(
             lambda x: mention_map.get(normalize_key(str(x)), str(x).strip()) if pd.notna(x) and str(x).strip() != '' else x
@@ -722,12 +665,9 @@ def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 
                 if are_duplicates(pd.Series(current), pd.Series(compare), title_similarity_threshold=SIMILARITY_THRESHOLD_TITULOS):
                     duplicate_indices.add(compare_orig_idx)
-                    # Registra el ID Noticia del registro original retenido
                     duplicate_to_original_id[compare_orig_idx] = current.get('ID Noticia')
 
     df['is_duplicate'] = df['original_index'].isin(duplicate_indices)
-
-    # Asigna el ID del registro retenido únicamente para las duplicadas
     df['ID Original Retenido'] = df['original_index'].map(duplicate_to_original_id)
 
     df.sort_values('original_index', inplace=True)
@@ -798,7 +738,6 @@ def to_excel(df):
     ws  = wb.active
     ws.title = 'Resultado'
 
-    # Se define font_link en negro y sin subrayado
     font_link     = Font(color='000000', underline=None)
     font_header   = Font(bold=True)
     align_left    = Alignment(horizontal='left')
@@ -829,7 +768,6 @@ def to_excel(df):
                     cv = None
 
             elif col_name in NUM_COLS:
-                # parse_numeric mantiene la precisión real (ej. flotantes con decimales)
                 cv = parse_numeric(val)
 
             elif col_name in ('Link Nota', 'Link (Streaming - Imagen)'):
@@ -849,30 +787,25 @@ def to_excel(df):
         ws.append(out_row)
         cur_row = ws.max_row
 
-        # Aplicar formatos numéricos, de fecha y estilos específicos de celda sin alterar el valor nativo
         for ci, col_name in enumerate(cols, start=1):
             cell = ws.cell(row=cur_row, column=ci)
 
-            # Formato de Fecha
             if col_name == 'Fecha':
                 if isinstance(cell.value, (datetime.datetime, datetime.date)):
                     cell.number_format = date_fmt
 
-            # Formato visual numérico nativo de Excel (conservando la precisión exacta por detrás)
             elif cell.value is not None and isinstance(cell.value, (int, float)):
                 if col_name in ('Nro. Pagina', 'Dimensión', 'Duración - Nro. Caracteres', 'Tier', 'Audiencia'):
                     cell.number_format = fmt_thousands
                 elif col_name == 'CPE':
                     cell.number_format = fmt_currency
 
-        # Hipervínculos
         for ci, url in link_map.items():
             cell = ws.cell(row=cur_row, column=ci)
             cell.hyperlink = url
             cell.font      = font_link
             cell.alignment = align_left
 
-    # Anchos de columna
     for i, col_name in enumerate(cols, start=1):
         letter = ws.cell(row=1, column=i).column_letter
         if col_name in ('Título', 'Resumen - Aclaracion'):
@@ -890,7 +823,6 @@ def to_excel(df):
 # INTERFAZ PRINCIPAL
 # ──────────────────────────────────────────────────────────────────────────────
 
-# Inicializar session_state
 for _k in ("result_1", "result_2"):
     if _k not in st.session_state:
         st.session_state[_k] = None
@@ -907,9 +839,8 @@ st.markdown("""
     <div class="card-title">Cómo usar esta herramienta</div>
     <div class="step">
         <div class="step-num">1</div>
-        <div class="step-text">Asegúrate de que <strong>Configuracion.xlsx</strong>,
-        <strong>pipeline_sentimiento.pkl</strong> y <strong>pipeline_tema.pkl</strong>
-        estén en la raíz del repositorio.</div>
+        <div class="step-text">Asegúrate de configurar las URLs públicas CSV de tu Google Sheets en los <strong>Secrets de Streamlit</strong>,
+        y que <strong>pipeline_sentimiento.pkl</strong> y <strong>pipeline_tema.pkl</strong> estén en la raíz.</div>
     </div>
     <div class="step">
         <div class="step-num">2</div>
@@ -924,19 +855,25 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-with st.expander("📋  Ver estructura requerida para Configuracion.xlsx"):
+with st.expander("📋  Ver estructura de Secrets requerida (Google Sheets en CSV)"):
     st.markdown("""
-    | Hoja | Columna A | Columna B |
-    |------|-----------|-----------|
-    | `Regiones` | Medio | Región |
-    | `Internet` | Medio Original | Medio Mapeado |
-    | `Menciones` | Mención Original | Mención Mapeada |
-    | `Mapa_Temas` | Temas Generales - Tema | Tema |
+    Debes agregar las siguientes claves en tu archivo local `.streamlit/secrets.toml` o en la consola de Streamlit Cloud:
+    ```toml
+    REGIONES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-xxxx/pub?gid=0&single=true&output=csv"
+    INTERNET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-xxxx/pub?gid=123456&single=true&output=csv"
+    MENCIONES_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-xxxx/pub?gid=789101&single=true&output=csv"
+    MAPA_TEMAS_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-xxxx/pub?gid=112131&single=true&output=csv"
+    ```
+    
+    *Cada hoja debe contar con 2 columnas (A y B) con el mismo orden del archivo original:*
+    - **Regiones:** Medio | Región
+    - **Internet:** Medio Original | Medio Mapeado
+    - **Menciones:** Mención Original | Mención Mapeada
+    - **Mapa_Temas:** Temas Generales - Tema | Tema
     """)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# Uploaders
 st.markdown('<div class="card-title">Carga de Dossiers</div>', unsafe_allow_html=True)
 
 col_up1, col_up2 = st.columns(2)
@@ -993,10 +930,8 @@ start_clicked = st.button(
     type="primary",
 )
 
-# Espacio reservado para descargas
 download_area = st.empty()
 
-# Procesamiento
 if start_clicked and files_loaded:
     st.session_state["result_1"] = None
     st.session_state["result_2"] = None
@@ -1007,19 +942,15 @@ if start_clicked and files_loaded:
 
         progress_bar = st.progress(0, text="Iniciando proceso...")
 
-        # 1. Carga de recursos
-        progress_bar.progress(5, text="Paso 1 / 7 — Cargando modelos PKL y configuración...")
+        # 1. Carga de recursos (Modelos y Configuración de Google Sheets)
+        progress_bar.progress(5, text="Paso 1 / 7 — Cargando modelos PKL y configuración desde Google Sheets...")
         sentiment_pipeline, topic_pipeline = load_ml_models()
 
-        config_path = _find_config_file()
-        if not config_path:
-            st.error("**No se encontró `Configuracion.xlsx`** en el repositorio.")
-            continue
-
         try:
-            region_map, internet_map, mention_map, final_topic_map = load_config(str(config_path))
+            region_map, internet_map, mention_map, final_topic_map = load_config_from_sheets()
         except Exception as e:
-            st.error(f"**Error al cargar `Configuracion.xlsx`:** {e}")
+            st.error(f"**Error al cargar las configuraciones remotas de Google Sheets:** {e}")
+            st.info("Revisa si tus URLs en secrets son válidas, públicas y de formato CSV.")
             continue
 
         # 2. Carga y normalización
@@ -1090,7 +1021,6 @@ if start_clicked and files_loaded:
         </div>
         """, unsafe_allow_html=True)
 
-# Render de botones de descarga
 res1 = st.session_state.get("result_1")
 res2 = st.session_state.get("result_2")
 
