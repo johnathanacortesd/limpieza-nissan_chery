@@ -6,3 +6,4 @@ nltk
 joblib
 xlsxwriter
 numpy
+starlette<0.40.0
