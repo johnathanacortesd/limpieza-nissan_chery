@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook, Workbook
+from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
+from excel_io import load_dossier_workbook
 import datetime
 import io
 import re
@@ -1060,71 +1061,83 @@ if start_clicked and files_loaded:
 
         # 2. Carga y normalización
         progress_bar.progress(15, text="Paso 2 / 7 — Leyendo Dossier y normalizando estructura...")
-        wb = load_workbook(f, data_only=True)
-        df = read_and_normalize_dossier(wb.active, region_map, internet_map)
+        try:
+            wb = load_dossier_workbook(f, data_only=True)
+            df = read_and_normalize_dossier(wb.active, region_map, internet_map)
+        except Exception as e:
+            st.error(
+                f"**No se pudo leer el archivo `{f.name}`.** "
+                "Algunos exports (Brandwatch/Excel) traen XML de relaciones "
+                f"roto y openpyxl no puede abrirlos. {e}"
+            )
+            continue
 
-        if df["Fecha"].isna().any():
-            st.warning("⚠️ Algunas fechas no se pudieron convertir. Revisa el archivo original.")
+        try:
+            if df["Fecha"].isna().any():
+                st.warning("⚠️ Algunas fechas no se pudieron convertir. Revisa el archivo original.")
 
-        # 3. Menciones
-        progress_bar.progress(28, text="Paso 3 / 7 — Expandiendo filas por menciones (;)...")
-        df = expand_menciones(df)
+            # 3. Menciones
+            progress_bar.progress(28, text="Paso 3 / 7 — Expandiendo filas por menciones (;)...")
+            df = expand_menciones(df)
 
-        progress_bar.progress(35, text="Paso 4 / 7 — Aplicando mapeos de menciones...")
-        df = apply_mention_map(df, mention_map)
+            progress_bar.progress(35, text="Paso 4 / 7 — Aplicando mapeos de menciones...")
+            df = apply_mention_map(df, mention_map)
 
-        # 4. Duplicados
-        progress_bar.progress(45, text="Paso 4b / 7 — Detectando duplicados de forma optimizada...")
-        df = detect_duplicates(df)
+            # 4. Duplicados
+            progress_bar.progress(45, text="Paso 4b / 7 — Detectando duplicados de forma optimizada...")
+            df = detect_duplicates(df)
 
-        # 5. Inteligencia Artificial
-        df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
+            # 5. Inteligencia Artificial
+            df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
 
-        # 6. Salida
-        progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
-        excel_data   = to_excel(df)
-        filename     = f"Dossier_{label}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-        total        = len(df)
-        dups_count   = int(df["is_duplicate"].sum())
-        unique_count = total - dups_count
+            # 6. Salida
+            progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
+            excel_data   = to_excel(df)
+            filename     = f"Dossier_{label}_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            total        = len(df)
+            dups_count   = int(df["is_duplicate"].sum())
+            unique_count = total - dups_count
 
-        progress_bar.progress(100, text="✓ Proceso completado")
+            progress_bar.progress(100, text="✓ Proceso completado")
 
-        st.session_state[state_key] = {
-            "data":     excel_data,
-            "filename": filename,
-            "label":    label,
-            "total":    total,
-            "unique":   unique_count,
-            "dups":     dups_count,
-        }
+            st.session_state[state_key] = {
+                "data":     excel_data,
+                "filename": filename,
+                "label":    label,
+                "total":    total,
+                "unique":   unique_count,
+                "dups":     dups_count,
+            }
 
-        st.markdown(f"""
-        <div class="success-banner">
-            <div class="icon">⚡</div>
-            <div class="text">
-                <strong>{label} — Proceso finalizado correctamente</strong>
-                <span>{total:,} filas · {unique_count:,} únicas · {dups_count:,} duplicadas</span>
+            st.markdown(f"""
+            <div class="success-banner">
+                <div class="icon">⚡</div>
+                <div class="text">
+                    <strong>{label} — Proceso finalizado correctamente</strong>
+                    <span>{total:,} filas · {unique_count:,} únicas · {dups_count:,} duplicadas</span>
+                </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-        st.markdown(f"""
-        <div class="metrics-row">
-            <div class="metric-card">
-                <div class="metric-value">{total:,}</div>
-                <div class="metric-label">Filas totales</div>
+            st.markdown(f"""
+            <div class="metrics-row">
+                <div class="metric-card">
+                    <div class="metric-value">{total:,}</div>
+                    <div class="metric-label">Filas totales</div>
+                </div>
+                <div class="metric-card accent">
+                    <div class="metric-value">{unique_count:,}</div>
+                    <div class="metric-label">Noticias únicas</div>
+                </div>
+                <div class="metric-card muted">
+                    <div class="metric-value">{dups_count:,}</div>
+                    <div class="metric-label">Duplicadas</div>
+                </div>
             </div>
-            <div class="metric-card accent">
-                <div class="metric-value">{unique_count:,}</div>
-                <div class="metric-label">Noticias únicas</div>
-            </div>
-            <div class="metric-card muted">
-                <div class="metric-value">{dups_count:,}</div>
-                <div class="metric-label">Duplicadas</div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
+        except Exception as e:
+            st.error(f"**Error al procesar `{f.name}`:** {e}")
+            continue
 
 # Render de botones de descarga
 res1 = st.session_state.get("result_1")

@@ -1,6 +1,7 @@
 streamlit
 pandas
 openpyxl
+python-calamine
 scikit-learn
 nltk
 joblib
