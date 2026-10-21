@@ -624,15 +624,37 @@ def expand_menciones(df):
 # ──────────────────────────────────────────────────────────────────────────────
 # MAPEO DE MENCIONES
 # ──────────────────────────────────────────────────────────────────────────────
+# La plataforma etiqueta las menciones corregidas de una marca con el sufijo
+# " - Corrección" (p. ej. "JMC - Corrección", "Chevrolet - Corrección",
+# "BYD - Corrección"); la marca real es el texto anterior al sufijo.
+_RE_SUFIJO_CORRECCION = re.compile(r'\s*-\s*correcci[oó]n\s*$', re.IGNORECASE)
+
+
+def quitar_sufijo_correccion(mencion):
+    """Quita el sufijo ' - Corrección' de una mención, si lo trae."""
+    return _RE_SUFIJO_CORRECCION.sub('', str(mencion).strip()).strip()
+
+
 def apply_mention_map(df, mention_map):
     """
     Aplica el mapeo a la columna Menciones - Empresa de manera flexible,
     evaluando la versión normalizada del texto para evitar fallos por espacios o guiones.
+
+    Si la mención no está en el mapa y trae el sufijo " - Corrección", se
+    devuelve la marca sin el sufijo (p. ej. "JMC - Corrección" -> "JMC"),
+    para que ninguna marca quede con la etiqueta de la plataforma.
     """
     if 'Menciones - Empresa' in df.columns:
-        df['Menciones - Empresa'] = df['Menciones - Empresa'].apply(
-            lambda x: mention_map.get(normalize_key(str(x)), str(x).strip()) if pd.notna(x) and str(x).strip() != '' else x
-        )
+        def _mapear(x):
+            if pd.isna(x) or str(x).strip() == '':
+                return x
+            original = str(x).strip()
+            mapeada = mention_map.get(normalize_key(original))
+            if mapeada is not None:
+                return mapeada
+            return quitar_sufijo_correccion(original)
+
+        df['Menciones - Empresa'] = df['Menciones - Empresa'].apply(_mapear)
     return df
 
 # ──────────────────────────────────────────────────────────────────────────────
