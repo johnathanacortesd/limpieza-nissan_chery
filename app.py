@@ -304,7 +304,13 @@ def get_col(df, *names, default=''):
 def convert_html_entities(text):
     if not isinstance(text, str):
         return text
-    text = html.unescape(text)
+    # Hasta 3 pasadas por si la entidad viene doblemente codificada
+    # ("&amp;#xF3;" -> "&#xF3;" -> "ó").
+    for _ in range(3):
+        decoded = html.unescape(text)
+        if decoded == text:
+            break
+        text = decoded
     for bad, good in {
         '\u201c': '"', '\u201d': '"', '\u2018': "'", '\u2019': "'",
         'Â': '', 'â': '', '€': '', '™': '', '\x9d': '', '\xa0': ' ',
@@ -327,9 +333,9 @@ def clean_title_for_output(title):
         return ""
     title = convert_html_entities(title)
     title = title.replace('\n', ' ').replace('\r', ' ')
-    title = re.sub(r'\s+\|.*$', '', title)
-    title = re.sub(r'\|\s+.*$', '', title)
-    title = re.sub(r'\s+-\s+.*$', '', title)
+    # El título NO se recorta: ni en "|" ni en " - " ni en nada similar; el
+    # texto tras esos separadores es parte del título (regla del usuario,
+    # 2026-10-21). Solo se decodifican entidades y se aplanan saltos de línea.
     return title.strip()
 
 def normalize_title_for_comparison(title):
