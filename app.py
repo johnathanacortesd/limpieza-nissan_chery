@@ -633,7 +633,17 @@ def expand_menciones(df):
 # La plataforma etiqueta las menciones corregidas de una marca con el sufijo
 # " - Corrección" (p. ej. "JMC - Corrección", "Chevrolet - Corrección",
 # "BYD - Corrección"); la marca real es el texto anterior al sufijo.
+# Excepción del usuario (2026-10-26, dossier origen): "General Motors -
+# Corrección" NO es una marca distinta de Chevrolet, es la misma marca, así
+# que tanto esa mención como "Chevrolet - Corrección" quedan como Chevrolet.
+# Sin esta unificación, are_duplicates() las rechaza en su primera
+# comparación (Menciones - Empresa distinta) y la misma noticia contaría dos
+# veces.
 _RE_SUFIJO_CORRECCION = re.compile(r'\s*-\s*correcci[oó]n\s*$', re.IGNORECASE)
+_ALIAS_MARCA = {
+    # Clave normalizada (ver normalize_key) -> marca final.
+    'general motors': 'Chevrolet',
+}
 
 
 def quitar_sufijo_correccion(mencion):
@@ -649,6 +659,8 @@ def apply_mention_map(df, mention_map):
     Si la mención no está en el mapa y trae el sufijo " - Corrección", se
     devuelve la marca sin el sufijo (p. ej. "JMC - Corrección" -> "JMC"),
     para que ninguna marca quede con la etiqueta de la plataforma.
+    Después de eso se aplica _ALIAS_MARCA, así "General Motors" (con o sin
+    sufijo, venga o no del mapa de Sheets) termina como "Chevrolet".
     """
     if 'Menciones - Empresa' in df.columns:
         def _mapear(x):
@@ -656,9 +668,8 @@ def apply_mention_map(df, mention_map):
                 return x
             original = str(x).strip()
             mapeada = mention_map.get(normalize_key(original))
-            if mapeada is not None:
-                return mapeada
-            return quitar_sufijo_correccion(original)
+            candidata = mapeada if mapeada is not None else quitar_sufijo_correccion(original)
+            return _ALIAS_MARCA.get(normalize_key(candidata), candidata)
 
         df['Menciones - Empresa'] = df['Menciones - Empresa'].apply(_mapear)
     return df
