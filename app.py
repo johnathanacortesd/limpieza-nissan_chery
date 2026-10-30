@@ -639,10 +639,28 @@ def expand_menciones(df):
 # Sin esta unificación, are_duplicates() las rechaza en su primera
 # comparación (Menciones - Empresa distinta) y la misma noticia contaría dos
 # veces.
+# Marcas agregadas por el usuario (2026-10-30): menciones de la forma
+# "<marca> - Nissan" que quedan como la marca sola (p. ej. "Geely - Nissan"
+# -> "Geely"). Son entradas explícitas, no un sufijo genérico: cualquier otra
+# marca con ese patrón que aparezca después hay que agregarla aquí.
+# Metrokia (2026-10-30) es alias de Kia: tanto "Metrokia" como
+# "Metrokia - Nissan" quedan como Kia.
 _RE_SUFIJO_CORRECCION = re.compile(r'\s*-\s*correcci[oó]n\s*$', re.IGNORECASE)
 _ALIAS_MARCA = {
     # Clave normalizada (ver normalize_key) -> marca final.
     'general motors': 'Chevrolet',
+    'geely - nissan': 'Geely',
+    'kia - nissan': 'Kia',
+    'metrokia': 'Kia',
+    'metrokia - nissan': 'Kia',
+    'volvo - nissan': 'Volvo',
+    'avatr - nissan': 'AVATR',
+    'zeekr - nissan': 'Zeekr',
+    'changan - nissan': 'Changan',
+    'deepal - nissan': 'Deepal',
+    'xpeng - nissan': 'Xpeng',
+    'farizon - nissan': 'Farizon',
+    'icaur - nissan': 'iCAUR',
 }
 
 
@@ -660,7 +678,11 @@ def apply_mention_map(df, mention_map):
     devuelve la marca sin el sufijo (p. ej. "JMC - Corrección" -> "JMC"),
     para que ninguna marca quede con la etiqueta de la plataforma.
     Después de eso se aplica _ALIAS_MARCA, así "General Motors" (con o sin
-    sufijo, venga o no del mapa de Sheets) termina como "Chevrolet".
+    sufijo, venga o no del mapa de Sheets) termina como "Chevrolet", y las
+    menciones "<marca> - Nissan" de _ALIAS_MARCA terminan como la marca sola
+    (p. ej. "Geely - Nissan" -> "Geely"). El mapa de Sheets sigue mandando
+    primero: si trae una fila para la mención, esa es la candidata que luego
+    pasa por _ALIAS_MARCA.
     """
     if 'Menciones - Empresa' in df.columns:
         def _mapear(x):
