@@ -356,8 +356,12 @@ def corregir_resumen(text):
     m = re.search(r'[A-Z]', text)
     if m:
         text = text[m.start():]
-    if text and not text.endswith('...'):
-        text = text.rstrip('.') + '...'
+    # El resumen termina en un solo punto, nunca en "..." ni "…" (regla del
+    # usuario, 2026-11-09): se quitan puntos suspensivos, puntos y signos
+    # sueltos del final (",", ";", ":", "-") y se cierra con ".".
+    text = re.sub(r'[\s.…,;:\-–—]+$', '', text)
+    if text:
+        text += '.'
     return text
 
 def clean_cuerpo(text):
