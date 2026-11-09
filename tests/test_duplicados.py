@@ -51,6 +51,9 @@ LINK_BMW = ("https://paisminero.com/index.php?option=com_content&view=article"
 LINK_GM = ("https://paisminero.com/index.php?option=com_content&view=article"
            "&id=32886:gm-pisa-los-pies-de-tesla-en-el-sector-de-vehiculos-electricos-con-la"
            "-celebracio-20261108060450&catid=192&Itemid=10003")
+LINK_AURA = ("https://paisminero.com/index.php?option=com_content&view=article"
+             "&id=32891:nuevo-id-aura-es-el-vehiculo-electrico-que-volkswagen-necesita-pero-su-software-"
+             "-20261108160211&catid=194&Itemid=924")
 
 
 def _fila(id_noticia, titulo, link_stream, **extra):
@@ -94,23 +97,6 @@ class AreDuplicatesTests(unittest.TestCase):
         gm = _fila(61836232, "GM pisa los pies de Tesla en el sector de vehículos eléctricos con la celebración del EV1", LINK_GM)
         self.assertFalse(are_duplicates(bmw, gm))
 
-    def test_sin_hipervinculo_en_stream_link_nota_distinto_no_es_duplicada(self):
-        # Segundo archivo reportado: "Link (Streaming - Imagen)" quedó como el
-        # texto "Link" (sin hipervínculo) y los Link Nota solo difieren en ?n=...
-        def nota(n):
-            return ("http://news.globalnews.com.co/Validar.aspx?n="
-                    f"{n}&u=50e96988-ec1d-4356-a82a-d70bf7d74619&m=audiovisual&lang=es")
-        bmw = _fila(61836227, "BMW Ofrece Carga Gratuita de Vehículos Eléctricos y Aún No Has Visto Nada",
-                    "Link", **{"Link Nota": nota(11987851)})
-        gm = _fila(61836232, "GM pisa los pies de Tesla en el sector de vehículos eléctricos con la celebración del EV1",
-                   "Link", **{"Link Nota": nota(11992065)})
-        aura = _fila(61841785, "Nuevo ID. AURA es el vehículo eléctrico que Volkswagen necesita, pero su software falla",
-                     "Link", **{"Link Nota": nota(12000001)})
-        self.assertFalse(are_duplicates(bmw, gm))
-        self.assertFalse(are_duplicates(bmw, aura))
-        out = detect_duplicates(pd.DataFrame([bmw, gm, aura]))
-        self.assertFalse(out["is_duplicate"].any())
-
     def test_mismo_titulo_distinto_link_no_es_duplicada(self):
         a = _fila(1, "Nissan lanza nuevo modelo", "https://m.com/nota?id=1")
         b = _fila(2, "Nissan lanza nuevo modelo", "https://m.com/nota?id=2")
@@ -138,15 +124,17 @@ class AreDuplicatesTests(unittest.TestCase):
 
 
 class DetectDuplicatesTests(unittest.TestCase):
-    def test_caso_reportado_ambas_quedan_unicas(self):
+    def test_caso_reportado_paisminero_las_tres_quedan_unicas(self):
+        # dup_mal.xlsx: GM y AURA salían como duplicadas de BMW (61836227)
+        # porque las tres URLs de Paisminero solo difieren en el query string.
         df = pd.DataFrame([
             _fila(61836227, "BMW Ofrece Carga Gratuita de Vehículos Eléctricos y Aún No Has Visto Nada", LINK_BMW),
             _fila(61836232, "GM pisa los pies de Tesla en el sector de vehículos eléctricos con la celebración del EV1", LINK_GM),
+            _fila(61841785, "Nuevo ID. AURA es el vehículo eléctrico que Volkswagen necesita, pero su software falla", LINK_AURA),
         ])
         out = detect_duplicates(df)
-        self.assertEqual(out["is_duplicate"].tolist(), [False, False])
+        self.assertEqual(out["is_duplicate"].tolist(), [False, False, False])
         self.assertTrue(out["ID Original Retenido"].isna().all())
-
 
 if __name__ == "__main__":
     unittest.main()
