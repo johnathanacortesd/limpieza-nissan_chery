@@ -444,15 +444,38 @@ def parse_numeric(val):
     except ValueError:
         return None
 
+# Parámetros de rastreo que no cambian la nota a la que apunta la URL.
+_TRACKING_PARAMS = {'fbclid', 'gclid', 'dclid', 'msclkid', 'mc_cid', 'mc_eid',
+                    'igshid', 'ref', 'ref_src', 'amp', 'outputtype'}
+
 def normalize_url(url) -> str:
+    """Normaliza una URL para comparar si dos enlaces apuntan a la misma nota.
+
+    Conserva el query string: en muchos medios (Joomla `index.php?...&id=32884`,
+    `Validar.aspx?n=61836227`) es lo único que distingue una nota de otra.
+    Solo se descartan el fragmento (#...), el `www.`, el esquema http/https y
+    los parámetros de rastreo (utm_*, fbclid, ...); los demás se ordenan.
+    """
     if not isinstance(url, str):
         return ""
-    url = url.strip().lower().rstrip('/')
-    if not url.startswith('http'):
+    url = url.strip()
+    if not url.lower().startswith('http'):
         return ""
-    url = re.sub(r'^(https?://)www\.', r'\1', url)
-    url = re.split(r'[?#]', url)[0].rstrip('/')
-    return url
+    url = url.split('#', 1)[0]
+    base, _, query = url.partition('?')
+    base = base.lower()
+    base = re.sub(r'^https?://(www\.)?', '', base).rstrip('/')
+    params = []
+    for part in query.split('&'):
+        if not part:
+            continue
+        key = part.split('=', 1)[0].lower()
+        if key.startswith('utm_') or key in _TRACKING_PARAMS:
+            continue
+        params.append(part)
+    if params:
+        return base + '?' + '&'.join(sorted(params))
+    return base
 
 def extract_link_from_cell(cell):
     if cell.hyperlink and cell.hyperlink.target:
@@ -728,11 +751,14 @@ def are_duplicates(row1: pd.Series, row2: pd.Series, title_similarity_threshold=
     if tipo1 != tipo2:
         return False
 
+    # El enlace incrustado en "Link (Streaming - Imagen)" manda: con la misma
+    # mención y el mismo medio, enlace distinto => notas distintas (aunque el
+    # título se parezca) y enlace igual => duplicada (aunque el título cambie).
     url_col = 'Link (Streaming - Imagen)'
     url1 = normalize_url(row1.get(url_col, ''))
     url2 = normalize_url(row2.get(url_col, ''))
-    if url1 and url2 and url1 != url2:
-        return False
+    if url1 and url2:
+        return url1 == url2
 
     fecha1 = row1.get('Fecha')
     fecha2 = row2.get('Fecha')
