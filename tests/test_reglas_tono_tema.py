@@ -25,6 +25,7 @@ def _cargar() -> dict:
 
 R = _cargar()
 es_accidente, es_delito = R["es_accidente"], R["es_delito"]
+detecta_vocero = R["detecta_vocero"]
 aplicar = R["aplicar_reglas_tono_tema"]
 SUB = "Temas Generales - Tema"
 
@@ -108,6 +109,68 @@ class AplicarReglasTests(unittest.TestCase):
             {"Título": "Nissan lanza la nueva Frontier"},
         ))
         self.assertEqual(self._valores(out), [("Duplicada", "-", "-"), ("Neutro", "Tecnológico", "Electrificación")])
+
+
+class VocerosTests(unittest.TestCase):
+    RESUMEN_LARGO = ("La marca presentó su portafolio para 2027 en el Salón del Automóvil. " * 30)
+
+    def test_voceros_nissan_por_nombre_aunque_esten_al_final(self):
+        for nombre in ("Leonardo Gutiérrez", "LEONARDO GUTIERREZ", "Carlos Vargas"):
+            resumen = self.RESUMEN_LARGO + f"Así lo explicó {nombre} durante el evento."
+            self.assertTrue(detecta_vocero("Nissan", "Nissan en el Salón", resumen), nombre)
+
+    def test_nombre_de_vocero_de_nissan_no_marca_otra_marca(self):
+        self.assertFalse(detecta_vocero("Chery", "", "Leonardo Gutiérrez habló del mercado."))
+
+    def test_cargo_ligado_a_la_marca_de_la_fila(self):
+        casos = [
+            ("Nissan", "Ana Pérez, gerente general de Nissan Colombia, habló de las ventas."),
+            ("Nissan", "El director de mercadeo y ventas de Nissan dio un balance del año."),
+            ("Nissan", "Nissan Colombia, a través de su presidente, anunció nuevas metas."),
+            ("Chery", "El CEO de Chery visitó Bogotá."),
+            ("Changan", "Según el vocero de la marca Changan, las ventas crecieron."),
+            ("Chevrolet", "La presidenta de General Motors Colombia habló del mercado."),
+            ("Deepal", "Pedro Gómez, country manager de Deepal, explicó la estrategia."),
+        ]
+        for marca, texto in casos:
+            self.assertTrue(detecta_vocero(marca, "", self.RESUMEN_LARGO + texto), texto)
+
+    def test_cargo_de_otra_entidad_no_cuenta(self):
+        casos = [
+            ("Nissan", "Elon Musk, CEO de Tesla, habló de los carros eléctricos de Nissan."),
+            ("Nissan", "El presidente de Fenalco, en la presentación, mencionó a Nissan."),
+            ("Nissan", "El exgerente de Nissan abrió su propia empresa."),
+            ("Nissan", "El gerente de Toyota destacó la Hilux; Nissan también exhibió la Frontier."),
+            ("Chery", "Nissan Colombia, a través de su presidente, anunció nuevas metas."),
+        ]
+        for marca, texto in casos:
+            self.assertFalse(detecta_vocero(marca, "", texto), texto)
+
+    def test_voceros_desde_hoja(self):
+        self.assertFalse(detecta_vocero("Chery", "", "María Ruiz presentó el Tiggo 4."))
+        voceros = R["preparar_voceros"]({"Chery": ["María Ruiz"]})
+        self.assertTrue(detecta_vocero("Chery", "", "María Ruiz presentó el Tiggo 4.", voceros))
+
+    def test_aplicar_conserva_tono_y_usa_mapa_de_temas(self):
+        out = aplicar(
+            _df({"Resumen - Aclaracion": self.RESUMEN_LARGO + "Lo dijo Carlos Vargas.", "Tono": "Positivo"},
+                {"Título": "Nissan lanza la nueva Frontier"}),
+            final_topic_map={"Proyecciones - Balances": "Indefinido"},
+        )
+        self.assertEqual(list(zip(out["Tono"], out["Tema"], out[SUB])), [
+            ("Positivo", "Indefinido", "Proyecciones - Balances"),
+            ("Neutro", "Tecnológico", "Electrificación"),
+        ])
+
+    def test_prioridades_accidente_y_juan_carlos_lopez_ganan(self):
+        out = aplicar(_df(
+            {"Título": "Accidente en la vía", "Resumen - Aclaracion": "Habló Carlos Vargas."},
+            {"Resumen - Aclaracion": "Juan Carlos López y el gerente general de Nissan hablaron."},
+        ))
+        self.assertEqual(list(zip(out["Tono"], out["Tema"], out[SUB])), [
+            ("No aplica", "Accidentes", "-"),
+            ("No aplica", "Juan Carlos López", "-"),
+        ])
 
 
 if __name__ == "__main__":

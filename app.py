@@ -262,6 +262,29 @@ def load_config_from_sheets():
 
     return region_map, internet_map, mention_map, final_topic_map
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_voceros_from_sheets():
+    """
+    Hoja OPCIONAL de voceros (clave VOCEROS_CSV_URL en Secrets): columna A
+    Marca (como queda en Menciones - Empresa), columna B nombre del vocero.
+    Si no está configurada o falla, devuelve {} y se usan solo los voceros
+    fijos de VOCEROS_POR_MARCA.
+    """
+    url = st.secrets.get("VOCEROS_CSV_URL") if hasattr(st, "secrets") else None
+    if not url:
+        return {}
+    try:
+        df_voc = pd.read_csv(url)
+    except Exception:
+        return {}
+    voceros = {}
+    for _, row in df_voc.iterrows():
+        marca, nombre = row.iloc[0], row.iloc[1] if len(row) > 1 else None
+        if pd.notna(marca) and pd.notna(nombre) and str(nombre).strip():
+            voceros.setdefault(str(marca).strip(), []).append(str(nombre).strip())
+    return voceros
+
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILIDADES DE TEXTO Y NÚMEROS
 # ──────────────────────────────────────────────────────────────────────────────
@@ -926,6 +949,10 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #          Tema "Juan Carlos López", Subtema "-".
 #        - AVATR, Changan o Deepal -> Tono "Positivo", Tema "Indefinido",
 #          Subtema "Proyecciones - Balances".
+#   4. Vocero de la marca de la fila (Menciones - Empresa) en Título o
+#      Resumen (CEO, presidente, gerente, director, vocero, representante...)
+#        -> Subtema "Proyecciones - Balances" y su Tema según Mapa_Temas
+#           (Indefinido); el Tono del PKL se conserva. Ver detecta_vocero().
 # Accidentes y delitos se detectan por palabras clave, sin tildes ni
 # mayúsculas. Hay palabras "fuertes" (accidente, choque, volcamiento,
 # robo, hurto...) y "de apoyo" (murió, heridos, capturado...):
@@ -1008,9 +1035,76 @@ def menciona_juan_carlos_lopez(*textos) -> bool:
     return any(_RE_JUAN_CARLOS_LOPEZ.search(_texto_plano(t)) for t in textos)
 
 
-def aplicar_reglas_tono_tema(df):
+# ── Voceros de marca ─────────────────────────────────────────────────────────
+# Una nota va a "Proyecciones - Balances" cuando habla un vocero de la MISMA
+# marca que trae la fila en Menciones - Empresa. Dos formas de detectarlo:
+#   a) Por nombre: VOCEROS_POR_MARCA (abajo) más la hoja opcional de Google
+#      Sheets VOCEROS_CSV_URL (columna A Marca, columna B Vocero).
+#   b) Por cargo ligado a la marca, en cualquier parte del título o resumen:
+#      "gerente general de Nissan Colombia", "el CEO de Chery",
+#      "director de mercadeo de Nissan", "Nissan, a través de su presidente".
+#      El cargo tiene que estar unido a la marca (sin comas ni puntos en medio
+#      y a pocas palabras), para que "el presidente de Fenalco" en una nota de
+#      Nissan no cuente.
+SUBTEMA_VOCEROS = 'Proyecciones - Balances'
+VOCEROS_POR_MARCA = {
+    'nissan': ['Leonardo Gutiérrez', 'Carlos Vargas'],
+}
+# Nombres con que aparece cada marca en el texto (sin tildes, minúsculas).
+_NOMBRES_MARCA_EN_TEXTO = {
+    'chevrolet': ['chevrolet', 'general motors', 'gm'],
+    'kia': ['kia', 'metrokia'],
+    'volkswagen': ['volkswagen', 'vw'],
+    'mercedes-benz': ['mercedes-benz', 'mercedes benz', 'mercedes'],
+    'byd': ['byd'],
+}
+_CARGOS = (
+    r'(?:ceo|cfo|coo|cmo|presidente|presidenta|vicepresidente|vicepresidenta|'
+    r'gerente|gerentes|director|directora|directores|directivo|directiva|directivos|'
+    r'vocero|vocera|voceros|representante|representantes|country manager|'
+    r'managing director|general manager|jefe|jefa|lider)'
+)
+_ENTIDAD = r'(?:la marca |la compania |la empresa |el grupo |la automotriz |la fabricante |la ensambladora )?'
+
+
+def _regex_marca(marca: str):
+    nombres = _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])
+    alt = '|'.join(re.escape(n) for n in nombres)
+    return re.compile(
+        r'\b' + _CARGOS + r'\b(?: \w+){0,5} (?:de|del|en|para) ' + _ENTIDAD + r'(?:' + alt + r')\b'
+        r'|\b(?:' + alt + r')\b(?: \w+){0,2},? (?:a traves de |por medio de |segun |con )?(?:su|sus) '
+        + _CARGOS + r'\b'
+    )
+
+
+def preparar_voceros(extra=None) -> dict:
+    """{marca normalizada: [regex de nombres]} a partir de VOCEROS_POR_MARCA + extra."""
+    combinados = {k: list(v) for k, v in VOCEROS_POR_MARCA.items()}
+    for marca, nombres in (extra or {}).items():
+        combinados.setdefault(_texto_plano(marca), []).extend(nombres)
+    out = {}
+    for marca, nombres in combinados.items():
+        limpios = sorted({_texto_plano(n) for n in nombres if _texto_plano(n)})
+        out[_texto_plano(marca)] = [re.compile(r'\b' + re.escape(n) + r'\b') for n in limpios]
+    return out
+
+
+def detecta_vocero(marca, titulo, resumen, voceros=None) -> bool:
+    marca = _texto_plano(marca)
+    if not marca:
+        return False
+    voceros = voceros if voceros is not None else preparar_voceros()
+    texto = _texto_plano(titulo) + ' . ' + _texto_plano(resumen)
+    if any(p.search(texto) for p in voceros.get(marca, [])):
+        return True
+    return bool(_regex_marca(marca).search(texto))
+
+
+def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None):
     """Aplica las reglas de negocio de arriba sobre Tono, Tema y Subtema."""
     df = df.copy()
+    voceros = preparar_voceros(voceros_extra)
+    tema_voceros = (final_topic_map or {}).get(SUBTEMA_VOCEROS, 'Indefinido')
     if df.empty:
         return df
     no_dup = ~df['is_duplicate'] if 'is_duplicate' in df.columns else pd.Series(True, index=df.index)
@@ -1028,8 +1122,12 @@ def aplicar_reglas_tono_tema(df):
                 valores = ('No aplica', 'Juan Carlos López', '-')
             elif marca in _MARCAS_JCL_POSITIVO:
                 valores = ('Positivo', 'Indefinido', 'Proyecciones - Balances')
+            elif detecta_vocero(marca, titulo, resumen, voceros):
+                valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
             else:
                 continue
+        elif detecta_vocero(marca, titulo, resumen, voceros):
+            valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
         else:
             continue
         df.loc[idx, ['Tono', 'Tema', SUBTEMA_COL]] = valores
@@ -1184,6 +1282,10 @@ with st.expander("📋  Ver estructura requerida para la configuración en Googl
     | `INTERNET_CSV_URL` | `Internet` | Medio Original | Medio Mapeado |
     | `MENCIONES_CSV_URL` | `Menciones` | Mención Original | Mención Mapeada |
     | `MAPA_TEMAS_CSV_URL` | `Mapa_Temas` | Temas Generales - Tema | Tema |
+    | `VOCEROS_CSV_URL` *(opcional)* | `Voceros` | Marca | Nombre del vocero |
+
+    La hoja `Voceros` es opcional: suma nombres de CEOs, gerentes y voceros por marca
+    (además de los fijos en el código) para marcar sus notas en **Proyecciones - Balances**.
 
     Para publicar cada hoja: **Archivo > Compartir > Publicar en la web**, eliges la hoja
     específica, formato **CSV**, y copias la URL resultante (tipo
@@ -1304,7 +1406,11 @@ if start_clicked and files_loaded:
 
             # 5. Inteligencia Artificial
             df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
-            df = aplicar_reglas_tono_tema(df)
+            try:
+                voceros_extra = load_voceros_from_sheets()
+            except Exception:
+                voceros_extra = {}
+            df = aplicar_reglas_tono_tema(df, final_topic_map, voceros_extra)
 
             # 6. Salida
             progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
