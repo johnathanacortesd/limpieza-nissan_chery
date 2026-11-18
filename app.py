@@ -7,6 +7,7 @@ import datetime
 import io
 import re
 import html
+import unicodedata
 import joblib
 import numpy as np
 import nltk
@@ -912,6 +913,129 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
     return df
 
 # ──────────────────────────────────────────────────────────────────────────────
+# REGLAS DE NEGOCIO SOBRE TONO / TEMA (después del PKL)
+# ──────────────────────────────────────────────────────────────────────────────
+# Reglas del usuario (2026-11-18). Se aplican solo a las notas no duplicadas y
+# reemplazan lo que dio el modelo PKL. Orden de prioridad:
+#   1. Accidente (de tránsito, choque, volcamiento, atropello...)
+#        -> Tono "No aplica", Tema "Accidentes", Subtema "-".
+#   2. Robo / hurto / delito
+#        -> Tono "No aplica", Tema "Orden público", Subtema "-".
+#   3. Nota que menciona a Juan Carlos López:
+#        - Menciones - Empresa Nissan o Chery -> Tono "No aplica", Tema "-",
+#          Subtema "-".
+#        - AVATR, Changan o Deepal -> Tono "Positivo", Tema "Indefinido",
+#          Subtema "Proyecciones - Balances".
+# Accidentes y delitos se detectan por palabras clave, sin tildes ni
+# mayúsculas. Hay palabras "fuertes" (accidente, choque, volcamiento,
+# robo, hurto...) y "de apoyo" (murió, heridos, capturado...):
+#   - Título: basta una palabra fuerte.
+#   - Resumen: hacen falta 2 palabras distintas y al menos una fuerte.
+# Antes de buscar se quitan frases de producto que no son noticias de un
+# accidente o un delito ("pruebas de choque", "evitar accidentes",
+# "alerta de colisión", "sistema antirrobo"...).
+SUBTEMA_COL = 'Temas Generales - Tema'
+
+_ACCIDENTE_FUERTES = [
+    r'accidentes?', r'accidentad[oa]s?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
+    r'chocaron', r'colisiono', r'colisionaron', r'volcamientos?', r'se volco', r'volco',
+    r'atropell\w*', r'arrollad[oa]s?', r'arrollo', r'se estrell\w*', r'estrello',
+    r'(?:rodo|cayo|cayeron|rodaron) (?:a|por) un (?:abismo|precipicio)', r'tragedia vial',
+    r'piques? ilegal(?:es)?',
+]
+_ACCIDENTE_APOYO = [
+    r'perdio la vida', r'perdieron la vida', r'(?:resulto|resultaron|quedo|quedaron) herid[oa]s?',
+    r'herid[oa]s?', r'murio', r'murieron', r'muert[oa]s?', r'fallecid[oa]s?', r'transito',
+    r'via\b', r'carretera', r'motociclista', r'peaton(?:es)?', r'conductor(?:a|es)?',
+]
+_DELITO_FUERTES = [
+    r'robos?', r'roban', r'robaron', r'robad[oa]s?', r'hurtos?', r'hurtad[oa]s?', r'hurtaron',
+    r'delitos?', r'delincuen\w*', r'ladron(?:es)?', r'atracos?', r'atracad\w*', r'asaltos?',
+    r'asaltaron', r'fleteo', r'extorsion\w*', r'secuestr\w*', r'homicidios?', r'sicari\w*',
+    r'bandas? (?:criminal(?:es)?|delincuencial(?:es)?)', r'receptacion', r'contrabando',
+    r'estafas?', r'estafador\w*',
+]
+_DELITO_APOYO = [
+    r'capturad[oa]s?', r'capturaron', r'captura', r'desmantel\w*', r'policia', r'fiscalia',
+    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*',
+]
+_FRASES_NEUTRAS = [
+    r'pruebas? de (?:choque|impacto|colision)', r'crash ?tests?', r'latin ?ncap', r'euro ?ncap',
+    r'(?:evitar|evita|prevenir|previene|reducir|reduce|mitigar|mitiga|prevencion de|riesgo de)'
+    r' (?:los |las |un |una )?(?:accidentes?|choques?|colisiones?)',
+    r'(?:alerta|aviso|advertencia|frenado|asistente|sistema|mitigacion) (?:de|ante|contra)'
+    r' (?:\w+ ){0,2}(?:colision\w*|choques?|impactos?)',
+    r'antirrobo', r'contra robos?', r'seguro contra \w+',
+]
+_RE = lambda ps: [re.compile(r'\b' + p + r'\b') for p in ps]
+_RE_ACC_F, _RE_ACC_A = _RE(_ACCIDENTE_FUERTES), _RE(_ACCIDENTE_APOYO)
+_RE_DEL_F, _RE_DEL_A = _RE(_DELITO_FUERTES), _RE(_DELITO_APOYO)
+_RE_NEUTRAS = re.compile(r'\b(?:' + '|'.join(_FRASES_NEUTRAS) + r')\b')
+_RE_JUAN_CARLOS_LOPEZ = re.compile(r'\bjuan carlos lopez\b')
+
+_MARCAS_JCL_NO_APLICA = {'nissan', 'chery'}
+_MARCAS_JCL_POSITIVO  = {'avatr', 'changan', 'deepal'}
+
+
+def _texto_plano(texto) -> str:
+    """Minúsculas, sin tildes y con espacios simples, para buscar palabras clave."""
+    if not isinstance(texto, str):
+        return ''
+    texto = unicodedata.normalize('NFKD', texto)
+    texto = ''.join(c for c in texto if not unicodedata.combining(c))
+    return re.sub(r'\s+', ' ', texto.lower()).strip()
+
+
+def _es_tema(titulo, resumen, fuertes, apoyo) -> bool:
+    titulo = _RE_NEUTRAS.sub(' ', _texto_plano(titulo))
+    if any(p.search(titulo) for p in fuertes):
+        return True
+    resumen = _RE_NEUTRAS.sub(' ', _texto_plano(resumen))
+    n_fuertes = sum(1 for p in fuertes if p.search(resumen))
+    n_apoyo = sum(1 for p in apoyo if p.search(resumen))
+    return n_fuertes >= 1 and n_fuertes + n_apoyo >= 2
+
+
+def es_accidente(titulo, resumen) -> bool:
+    return _es_tema(titulo, resumen, _RE_ACC_F, _RE_ACC_A)
+
+
+def es_delito(titulo, resumen) -> bool:
+    return _es_tema(titulo, resumen, _RE_DEL_F, _RE_DEL_A)
+
+
+def menciona_juan_carlos_lopez(*textos) -> bool:
+    return any(_RE_JUAN_CARLOS_LOPEZ.search(_texto_plano(t)) for t in textos)
+
+
+def aplicar_reglas_tono_tema(df):
+    """Aplica las reglas de negocio de arriba sobre Tono, Tema y Subtema."""
+    df = df.copy()
+    if df.empty:
+        return df
+    no_dup = ~df['is_duplicate'] if 'is_duplicate' in df.columns else pd.Series(True, index=df.index)
+    for idx in df.index[no_dup]:
+        fila = df.loc[idx]
+        titulo, resumen = fila.get('Título', ''), fila.get('Resumen - Aclaracion', '')
+        marca = str(fila.get('Menciones - Empresa', '') or '').strip().lower()
+
+        if es_accidente(titulo, resumen):
+            valores = ('No aplica', 'Accidentes', '-')
+        elif es_delito(titulo, resumen):
+            valores = ('No aplica', 'Orden público', '-')
+        elif menciona_juan_carlos_lopez(titulo, resumen, fila.get('Autor - Conductor', '')):
+            if marca in _MARCAS_JCL_NO_APLICA:
+                valores = ('No aplica', '-', '-')
+            elif marca in _MARCAS_JCL_POSITIVO:
+                valores = ('Positivo', 'Indefinido', 'Proyecciones - Balances')
+            else:
+                continue
+        else:
+            continue
+        df.loc[idx, ['Tono', 'Tema', SUBTEMA_COL]] = valores
+    return df
+
+# ──────────────────────────────────────────────────────────────────────────────
 # GENERACIÓN DEL EXCEL DE SALIDA
 # ──────────────────────────────────────────────────────────────────────────────
 def to_excel(df):
@@ -1180,6 +1304,7 @@ if start_clicked and files_loaded:
 
             # 5. Inteligencia Artificial
             df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
+            df = aplicar_reglas_tono_tema(df)
 
             # 6. Salida
             progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
