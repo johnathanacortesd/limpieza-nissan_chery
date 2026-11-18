@@ -162,6 +162,25 @@ class VocerosTests(unittest.TestCase):
             ("Neutro", "Tecnológico", "Electrificación"),
         ])
 
+    def test_nota_con_varias_menciones_solo_cambia_la_marca_del_vocero(self):
+        # Misma nota expandida en una fila por mención (expand_menciones):
+        # habla el CEO de Renault -> solo la fila de Renault va a
+        # Proyecciones - Balances; Nissan y Chery quedan como dijo el PKL.
+        resumen = (self.RESUMEN_LARGO + "Luca de Meo, CEO de Renault, habló de las ventas. "
+                   "Nissan y Chery también exhibieron sus modelos.")
+        comun = {"Título": "Así fue el Salón del Automóvil", "Resumen - Aclaracion": resumen}
+        out = aplicar(
+            _df({**comun, "Menciones - Empresa": "Renault", "Tono": "Neutro", "Tema": "Indefinido", SUB: "Eventos"},
+                {**comun, "Menciones - Empresa": "Nissan", "Tono": "Positivo", "Tema": "Indefinido", SUB: "Lanzamientos"},
+                {**comun, "Menciones - Empresa": "Chery", "Tono": "Neutro", "Tema": "Tecnológico", SUB: "Electrificación"}),
+            final_topic_map={"Proyecciones - Balances": "Indefinido"},
+        )
+        self.assertEqual(list(zip(out["Menciones - Empresa"], out["Tono"], out["Tema"], out[SUB])), [
+            ("Renault", "Neutro", "Indefinido", "Proyecciones - Balances"),
+            ("Nissan", "Positivo", "Indefinido", "Lanzamientos"),
+            ("Chery", "Neutro", "Tecnológico", "Electrificación"),
+        ])
+
     def test_prioridades_accidente_y_juan_carlos_lopez_ganan(self):
         out = aplicar(_df(
             {"Título": "Accidente en la vía", "Resumen - Aclaracion": "Habló Carlos Vargas."},
