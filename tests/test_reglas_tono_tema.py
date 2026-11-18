@@ -192,5 +192,55 @@ class VocerosTests(unittest.TestCase):
         ])
 
 
+class DescubrirVocerosTests(unittest.TestCase):
+    def test_descubre_nombre_con_cargo_y_lo_usa_en_otra_nota(self):
+        # Nota 1 trae nombre + cargo; nota 2 solo el nombre, al final de un resumen largo.
+        largo = "La marca mostró su portafolio para 2027. " * 30
+        df = _df(
+            {"Resumen - Aclaracion": "Laura Méndez, gerente comercial de Nissan Colombia, habló del Salón."},
+            {"Resumen - Aclaracion": largo + "Así lo explicó Laura Méndez en entrevista."},
+            {"Resumen - Aclaracion": largo + "Así lo explicó Laura Méndez en entrevista.", "Menciones - Empresa": "Chery"},
+        )
+        out = aplicar(df)
+        self.assertEqual(out.attrs["voceros_descubiertos"], {"Nissan": ["Laura Mendez"]})
+        self.assertEqual(out[SUB].tolist(), ["Proyecciones - Balances", "Proyecciones - Balances", "Electrificación"])
+
+    def test_formas_de_presentar_al_vocero(self):
+        casos = {
+            "El gerente general de Nissan Colombia, Pedro Ramírez, dio el balance.": "Pedro Ramirez",
+            "En Bogotá Ana María Ruiz, directora de mercadeo de Nissan, habló.": "Ana Maria Ruiz",
+            "Según Carlos de la Torre, vocero de la marca Nissan, las ventas crecieron.": "Carlos de la Torre",
+        }
+        for texto, esperado in casos.items():
+            hallados = R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto}))
+            self.assertIn(esperado, hallados.get("Nissan", []), texto)
+
+    def test_no_descubre_lugares_ni_cargos_de_otra_marca(self):
+        textos = [
+            "Bogotá Colombia, gerente de Nissan, no es un nombre.",
+            "Elon Musk, CEO de Tesla, habló de Nissan.",
+        ]
+        for t in textos:
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": t})), {}, t)
+
+    def test_distribuidor_de_una_sola_marca(self):
+        self.assertTrue(detecta_vocero("Nissan", "", "El gerente general de Dinissan habló del mercado."))
+        self.assertTrue(detecta_vocero("Renault", "", "El presidente de Sofasa anunció exportaciones."))
+        self.assertTrue(detecta_vocero("Chery", "", "La gerente general de Auto Vardí explicó la meta."))
+
+    def test_voceros_investigados(self):
+        for marca, nombre in (("Renault", "Juan Camilo Vélez"), ("Toyota", "Hiroshi Yonenaga"),
+                              ("Hyundai", "Adriana Casadiego"), ("JMC", "Noel Ardila Rey"),
+                              ("iCAUR", None), ("Nissan", "Ricardo Toro")):
+            if nombre:
+                self.assertTrue(detecta_vocero(marca, "", f"Habló {nombre} sobre el año."), marca)
+
+
+class AliasMarcaTests(unittest.TestCase):
+    def test_jetour_nissan_pasa_a_jetour(self):
+        fuente = _APP.read_text(encoding="utf-8")
+        self.assertIn("'jetour - nissan': 'Jetour'", fuente)
+
+
 if __name__ == "__main__":
     unittest.main()
