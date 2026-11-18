@@ -1048,33 +1048,41 @@ def menciona_juan_carlos_lopez(*textos) -> bool:
 #      y a pocas palabras), para que "el presidente de Fenalco" en una nota de
 #      Nissan no cuente.
 SUBTEMA_VOCEROS = 'Proyecciones - Balances'
-# Voceros conocidos en Colombia (investigación en prensa, noviembre de 2026;
+# Voceros conocidos en Colombia y CEO globales (investigación en prensa, noviembre de 2026;
 # fuentes y cargos en voceros_marcas.xlsx). La clave es la marca como queda en
 # Menciones - Empresa. Juan Carlos López (Changan / Deepal / AVATR, Grupo
 # Vardí) no va aquí: tiene su propia regla, que va antes.
 VOCEROS_POR_MARCA = {
+    # Colombia (gerentes, presidentes, voceros locales) + Global (CEO y
+    # presidentes de la casa matriz).
     'nissan': ['Leonardo Gutiérrez', 'Carlos Vargas', 'Ricardo Toro', 'Mauricio Salazar',
                'Carlos Felipe Caicedo', 'Iván Espinosa'],
-    'chery': ['María Cristina Castro', 'David Huertas', 'Carlos Urrego'],
-    'renault': ['Juan Camilo Vélez', 'Paula Vargas García', 'Carlos Trivelin'],
-    'chevrolet': ['Juan David Rosero', 'Thomas Owsianski'],
-    'toyota': ['Hiroshi Yonenaga'],
-    'kia': ['Jorge Neira', 'Carolina Suárez'],
-    'hyundai': ['Adriana Casadiego'],
-    'volkswagen': ['Jessica Passos', 'Jessica Rossini dos Passos', 'Juan Felipe Bedoya'],
-    'byd': ['Juan Luis Mesa', 'Juan Pablo Molano', 'Marco Pastrana'],
-    'tesla': ['Karen Scarpetta'],
+    'chery': ['María Cristina Castro', 'David Huertas', 'Carlos Urrego', 'Yin Tongyue'],
+    'renault': ['Juan Camilo Vélez', 'Paula Vargas García', 'Carlos Trivelin', 'François Provost',
+                'Fabrice Cambolive'],
+    'chevrolet': ['Juan David Rosero', 'Thomas Owsianski', 'Mary Barra', 'Mark Reuss'],
+    'toyota': ['Hiroshi Yonenaga', 'Kenta Kon', 'Koji Sato', 'Akio Toyoda'],
+    'kia': ['Jorge Neira', 'Carolina Suárez', 'Ho Sung Song', 'Song Ho-sung'],
+    'hyundai': ['Adriana Casadiego', 'José Muñoz', 'Euisun Chung', 'Chung Eui-sun'],
+    'volkswagen': ['Jessica Passos', 'Jessica Rossini dos Passos', 'Juan Felipe Bedoya',
+                   'Oliver Blume', 'Thomas Schäfer'],
+    'byd': ['Juan Luis Mesa', 'Juan Pablo Molano', 'Marco Pastrana', 'Wang Chuanfu'],
+    # Tesla: toda nota de Tesla donde aparezca Musk va a Proyecciones - Balances.
+    'tesla': ['Karen Scarpetta', 'Elon Musk', 'Musk'],
     'mg': ['Paola Ruiz', 'Ricardo Salazar'],
-    'geely': ['Diego Zárate'],
+    'geely': ['Diego Zárate', 'Li Shufu', 'Gan Jiayue', 'Gui Shengyue'],
     'farizon': ['Felipe Negret'],
-    'ford': ['José Llanos'],
-    'volvo': ['Alberto Telch', 'Ángela Bolívar'],
-    'suzuki': ['Verónica Borrero', 'Juan José Orozco', 'Juan David Uribe'],
-    'xpeng': ['Nicolás Muñoz'],
-    'zeekr': ['José Luis Porras'],
+    'ford': ['José Llanos', 'Jim Farley'],
+    'volvo': ['Alberto Telch', 'Ángela Bolívar', 'Håkan Samuelsson', 'Klaus Zellmer'],
+    'suzuki': ['Verónica Borrero', 'Juan José Orozco', 'Juan David Uribe', 'Toshihiro Suzuki'],
+    'xpeng': ['Nicolás Muñoz', 'He Xiaopeng'],
+    'zeekr': ['José Luis Porras', 'An Conghui', 'Gan Jiayue'],
     'jmc': ['Noel Ardila'],
     'jetour': ['Juan Diego Galindo', 'Andrés Felipe Naranjo'],
-    'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson'],
+    'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson', 'Masahiro Moro'],
+    'changan': ['Zhu Huarong'],
+    'deepal': ['Deng Chenghao'],
+    'avatr': ['Zhu Huarong', 'Chen Zhuo'],
 }
 # Nombres con que aparece cada marca en el texto (sin tildes, minúsculas),
 # incluido su distribuidor cuando representa solo a esa marca. Los grupos con

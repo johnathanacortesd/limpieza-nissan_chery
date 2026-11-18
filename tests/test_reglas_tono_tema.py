@@ -236,6 +236,27 @@ class DescubrirVocerosTests(unittest.TestCase):
                 self.assertTrue(detecta_vocero(marca, "", f"Habló {nombre} sobre el año."), marca)
 
 
+class CeoGlobalesTests(unittest.TestCase):
+    def test_musk_en_nota_de_tesla_va_a_proyecciones(self):
+        for texto in ("Elon Musk anunció la producción del Cybercab.",
+                      "Tesla presentó resultados. " * 20 + "Según Musk, el robotaxi llegará en 2027."):
+            self.assertTrue(detecta_vocero("Tesla", "", texto), texto)
+        out = aplicar(_df({"Título": "Musk habla del futuro de la marca", "Menciones - Empresa": "Tesla",
+                           "Tono": "Neutro", SUB: "Lanzamientos"}))
+        self.assertEqual(out[SUB].tolist(), ["Proyecciones - Balances"])
+        self.assertEqual(out["Tono"].tolist(), ["Neutro"])
+
+    def test_musk_no_cuenta_para_otra_marca(self):
+        self.assertFalse(detecta_vocero("Nissan", "", "Elon Musk, CEO de Tesla, criticó a Nissan."))
+
+    def test_ceo_global_por_marca(self):
+        for marca, nombre in (("Toyota", "Kenta Kon"), ("BYD", "Wang Chuanfu"), ("Volkswagen", "Oliver Blume"),
+                              ("Chevrolet", "Mary Barra"), ("Ford", "Jim Farley"), ("Volvo", "Håkan Samuelsson"),
+                              ("Hyundai", "Chung Eui-sun"), ("Xpeng", "He Xiaopeng"), ("Mazda", "Masahiro Moro")):
+            self.assertTrue(detecta_vocero(marca, "", f"{nombre} habló de las metas del grupo."), marca)
+        self.assertFalse(detecta_vocero("Kia", "", "Kenta Kon habló de las metas de Toyota."))
+
+
 class AliasMarcaTests(unittest.TestCase):
     def test_jetour_nissan_pasa_a_jetour(self):
         fuente = _APP.read_text(encoding="utf-8")
