@@ -262,6 +262,29 @@ def load_config_from_sheets():
 
     return region_map, internet_map, mention_map, final_topic_map
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_voceros_from_sheets():
+    """
+    Hoja OPCIONAL de voceros (clave VOCEROS_CSV_URL en Secrets): columna A
+    Marca (como queda en Menciones - Empresa), columna B nombre del vocero.
+    Si no está configurada o falla, devuelve {} y se usan solo los voceros
+    fijos de VOCEROS_POR_MARCA.
+    """
+    url = st.secrets.get("VOCEROS_CSV_URL") if hasattr(st, "secrets") else None
+    if not url:
+        return {}
+    try:
+        df_voc = pd.read_csv(url)
+    except Exception:
+        return {}
+    voceros = {}
+    for _, row in df_voc.iterrows():
+        marca, nombre = row.iloc[0], row.iloc[1] if len(row) > 1 else None
+        if pd.notna(marca) and pd.notna(nombre) and str(nombre).strip():
+            voceros.setdefault(str(marca).strip(), []).append(str(nombre).strip())
+    return voceros
+
 # ──────────────────────────────────────────────────────────────────────────────
 # UTILIDADES DE TEXTO Y NÚMEROS
 # ──────────────────────────────────────────────────────────────────────────────
@@ -681,6 +704,7 @@ _ALIAS_MARCA = {
     'kia - nissan': 'Kia',
     'metrokia': 'Kia',
     'metrokia - nissan': 'Kia',
+    'jetour - nissan': 'Jetour',
     'volvo - nissan': 'Volvo',
     'avatr - nissan': 'AVATR',
     'zeekr - nissan': 'Zeekr',
@@ -926,18 +950,23 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #          Tema "Juan Carlos López", Subtema "-".
 #        - AVATR, Changan o Deepal -> Tono "Positivo", Tema "Indefinido",
 #          Subtema "Proyecciones - Balances".
+#   4. Vocero de la marca de la fila (Menciones - Empresa) en Título o
+#      Resumen (CEO, presidente, gerente, director, vocero, representante...)
+#        -> Subtema "Proyecciones - Balances" y su Tema según Mapa_Temas
+#           (Indefinido); el Tono del PKL se conserva. Ver detecta_vocero().
 # Accidentes y delitos se detectan por palabras clave, sin tildes ni
 # mayúsculas. Hay palabras "fuertes" (accidente, choque, volcamiento,
 # robo, hurto...) y "de apoyo" (murió, heridos, capturado...):
 #   - Título: basta una palabra fuerte.
-#   - Resumen: hacen falta 2 palabras distintas y al menos una fuerte.
+#   - Resumen: accidente con 2 palabras fuertes distintas (3 señales en total);
+#     orden público con 4 fuertes (6 en total). Ver es_accidente / es_delito.
 # Antes de buscar se quitan frases de producto que no son noticias de un
 # accidente o un delito ("pruebas de choque", "evitar accidentes",
 # "alerta de colisión", "sistema antirrobo"...).
 SUBTEMA_COL = 'Temas Generales - Tema'
 
 _ACCIDENTE_FUERTES = [
-    r'accidentes?', r'accidentad[oa]s?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
+    r'accidentes?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
     r'chocaron', r'colisiono', r'colisionaron', r'volcamientos?', r'se volco', r'volco',
     r'atropell\w*', r'arrollad[oa]s?', r'arrollo', r'se estrell\w*', r'estrello',
     r'(?:rodo|cayo|cayeron|rodaron) (?:a|por) un (?:abismo|precipicio)', r'tragedia vial',
@@ -946,7 +975,8 @@ _ACCIDENTE_FUERTES = [
 _ACCIDENTE_APOYO = [
     r'perdio la vida', r'perdieron la vida', r'(?:resulto|resultaron|quedo|quedaron) herid[oa]s?',
     r'herid[oa]s?', r'murio', r'murieron', r'muert[oa]s?', r'fallecid[oa]s?', r'transito',
-    r'via\b', r'carretera', r'motociclista', r'peaton(?:es)?', r'conductor(?:a|es)?',
+    r'via\b', r'carretera', r'motociclistas?', r'peaton(?:es)?', r'conductor(?:a|es)?',
+    r'accidentad[oa]s?', r'fallece', r'fallecio',
 ]
 _DELITO_FUERTES = [
     r'robos?', r'roban', r'robaron', r'robad[oa]s?', r'hurtos?', r'hurtad[oa]s?', r'hurtaron',
@@ -954,14 +984,20 @@ _DELITO_FUERTES = [
     r'asaltaron', r'fleteo', r'extorsion\w*', r'secuestr\w*', r'homicidios?', r'sicari\w*',
     r'bandas? (?:criminal(?:es)?|delincuencial(?:es)?)', r'receptacion', r'contrabando',
     r'estafas?', r'estafador\w*',
+    # Orden público en sentido amplio (base revisada de noviembre de 2026):
+    r'desaparecid[oa]s?', r'desaparicion(?:es)?', r'atentados?', r'asesinat\w*', r'asesin[oa]s?',
+    r'balead[oa]s?', r'balacera', r'sin vida', r'tras las rejas', r'ataque armado',
+    r'(?:hombres|sujetos|grupos?|delincuentes) armad[oa]s', r'incendios?', r'se incendio',
+    r'conflagracion', r'gaula', r'masacre', r'amenazas? de muerte', r'capturad[oa]s?', r'capturaron',
 ]
 _DELITO_APOYO = [
-    r'capturad[oa]s?', r'capturaron', r'captura', r'desmantel\w*', r'policia', r'fiscalia',
-    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*',
+    r'captura', r'desmantel\w*', r'policia', r'fiscalia', r'carcel', r'prision',
+    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*', r'recompensa', r'bomberos',
+    r'victimas?', r'liberacion',
 ]
 _FRASES_NEUTRAS = [
     r'pruebas? de (?:choque|impacto|colision)', r'crash ?tests?', r'latin ?ncap', r'euro ?ncap',
-    r'(?:evitar|evita|prevenir|previene|reducir|reduce|mitigar|mitiga|prevencion de|riesgo de)'
+    r'(?:evitar|evita|evitan|prevenir|previene|previenen|reducir|reduce|reducen|mitigar|mitiga|prevencion de|riesgo de)'
     r' (?:los |las |un |una )?(?:accidentes?|choques?|colisiones?)',
     r'(?:alerta|aviso|advertencia|frenado|asistente|sistema|mitigacion) (?:de|ante|contra)'
     r' (?:\w+ ){0,2}(?:colision\w*|choques?|impactos?)',
@@ -986,31 +1022,220 @@ def _texto_plano(texto) -> str:
     return re.sub(r'\s+', ' ', texto.lower()).strip()
 
 
-def _es_tema(titulo, resumen, fuertes, apoyo) -> bool:
+def _es_tema(titulo, resumen, fuertes, apoyo, min_fuertes, min_total) -> bool:
     titulo = _RE_NEUTRAS.sub(' ', _texto_plano(titulo))
     if any(p.search(titulo) for p in fuertes):
         return True
     resumen = _RE_NEUTRAS.sub(' ', _texto_plano(resumen))
     n_fuertes = sum(1 for p in fuertes if p.search(resumen))
     n_apoyo = sum(1 for p in apoyo if p.search(resumen))
-    return n_fuertes >= 1 and n_fuertes + n_apoyo >= 2
+    return n_fuertes >= min_fuertes and n_fuertes + n_apoyo >= min_total
 
 
+# Umbrales para el RESUMEN, calibrados con la base revisada "Base Nissan - 09
+# al 15 de noviembre" (2026): con menos exigencia se marcaban como accidente u
+# orden público notas buenas (campañas de seguridad de Volvo, fin de la
+# Cybertruck, resúmenes de noticieros que nombran un choque de pasada).
 def es_accidente(titulo, resumen) -> bool:
-    return _es_tema(titulo, resumen, _RE_ACC_F, _RE_ACC_A)
+    return _es_tema(titulo, resumen, _RE_ACC_F, _RE_ACC_A, min_fuertes=2, min_total=3)
 
 
 def es_delito(titulo, resumen) -> bool:
-    return _es_tema(titulo, resumen, _RE_DEL_F, _RE_DEL_A)
+    return _es_tema(titulo, resumen, _RE_DEL_F, _RE_DEL_A, min_fuertes=4, min_total=6)
 
 
 def menciona_juan_carlos_lopez(*textos) -> bool:
     return any(_RE_JUAN_CARLOS_LOPEZ.search(_texto_plano(t)) for t in textos)
 
 
-def aplicar_reglas_tono_tema(df):
-    """Aplica las reglas de negocio de arriba sobre Tono, Tema y Subtema."""
+# ── Voceros de marca ─────────────────────────────────────────────────────────
+# Una nota va a "Proyecciones - Balances" cuando habla un vocero de la MISMA
+# marca que trae la fila en Menciones - Empresa. Dos formas de detectarlo:
+#   a) Por nombre: VOCEROS_POR_MARCA (abajo) más la hoja opcional de Google
+#      Sheets VOCEROS_CSV_URL (columna A Marca, columna B Vocero).
+#   b) Por cargo ligado a la marca, en cualquier parte del título o resumen:
+#      "gerente general de Nissan Colombia", "el CEO de Chery",
+#      "director de mercadeo de Nissan", "Nissan, a través de su presidente".
+#      El cargo tiene que estar unido a la marca (sin comas ni puntos en medio
+#      y a pocas palabras), para que "el presidente de Fenalco" en una nota de
+#      Nissan no cuente.
+SUBTEMA_VOCEROS = 'Proyecciones - Balances'
+# Voceros conocidos en Colombia y CEO globales (investigación en prensa, noviembre de 2026;
+# fuentes y cargos en voceros_marcas.xlsx). La clave es la marca como queda en
+# Menciones - Empresa. Juan Carlos López (Changan / Deepal / AVATR, Grupo
+# Vardí) no va aquí: tiene su propia regla, que va antes.
+VOCEROS_POR_MARCA = {
+    # Colombia (gerentes, presidentes, voceros locales) + Global (CEO y
+    # presidentes de la casa matriz).
+    'nissan': ['Leonardo Gutiérrez', 'Carlos Vargas', 'Ricardo Toro', 'Mauricio Salazar',
+               'Carlos Felipe Caicedo', 'Iván Espinosa'],
+    'chery': ['María Cristina Castro', 'David Huertas', 'Carlos Urrego', 'Yin Tongyue', 'Paola Vivas'],
+    'renault': ['Juan Camilo Vélez', 'Paula Vargas García', 'Carlos Trivelin', 'François Provost',
+                'Fabrice Cambolive', 'Marcela Pérez', 'Juan David Colorado', 'Camilo Arango', 'Sara Betancur'],
+    'chevrolet': ['Juan David Rosero', 'Thomas Owsianski', 'Mary Barra', 'Mark Reuss'],
+    'toyota': ['Hiroshi Yonenaga', 'Kenta Kon', 'Koji Sato', 'Akio Toyoda'],
+    'kia': ['Jorge Neira', 'Carolina Suárez', 'Ho Sung Song', 'Song Ho-sung', 'Soohang Chang', 'Andrés Plata', 'Camila Márquez', 'Jaime Martínez'],
+    'hyundai': ['Adriana Casadiego', 'José Muñoz', 'Euisun Chung', 'Chung Eui-sun', 'Andrea Saldívar', 'Xavier Martinet'],
+    'volkswagen': ['Jessica Passos', 'Jessica Rossini dos Passos', 'Juan Felipe Bedoya',
+                   'Oliver Blume', 'Thomas Schäfer', 'Nathalie Ortiz'],
+    'byd': ['Juan Luis Mesa', 'Juan Pablo Molano', 'Marco Pastrana', 'Wang Chuanfu', 'Stella Li', 'Wolfgang Egger', 'Maritza Rincón'],
+    # Tesla: toda nota de Tesla donde aparezca Musk va a Proyecciones - Balances.
+    'tesla': ['Karen Scarpetta', 'Elon Musk', 'Musk', 'Ashok Elluswamy'],
+    'mg': ['Paola Ruiz', 'Ricardo Salazar'],
+    'geely': ['Diego Zárate', 'Li Shufu', 'Gan Jiayue', 'Gui Shengyue'],
+    'farizon': ['Felipe Negret'],
+    'ford': ['José Llanos', 'Jim Farley', 'Guillermo Lastra'],
+    'volvo': ['Alberto Telch', 'Ángela Bolívar', 'Håkan Samuelsson', 'Klaus Zellmer', 'Luis Pinto'],
+    'suzuki': ['Verónica Borrero', 'Juan José Orozco', 'Juan David Uribe', 'Toshihiro Suzuki'],
+    'xpeng': ['Nicolás Muñoz', 'He Xiaopeng', 'Brian Gu'],
+    'zeekr': ['José Luis Porras', 'An Conghui', 'Gan Jiayue', 'Sebastián Gómez'],
+    'jmc': ['Noel Ardila'],
+    'jetour': ['Juan Diego Galindo', 'Andrés Felipe Naranjo'],
+    'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson', 'Masahiro Moro', 'Miguel Barbeyto', 'Ryuichi Umeshita'],
+    'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo'],
+    'deepal': ['Deng Chenghao'],
+    'avatr': ['Zhu Huarong', 'Chen Zhuo'],
+    'icaur': ['Paola Vivas'],
+}
+# Nombres con que aparece cada marca en el texto (sin tildes, minúsculas),
+# incluido su distribuidor cuando representa solo a esa marca. Los grupos con
+# varias marcas (Grupo Vardí, Astara, Inchcape, Porsche Colombia, Autocom) no
+# se ponen: un "gerente de Astara" no dice de qué marca habla.
+_NOMBRES_MARCA_EN_TEXTO = {
+    'nissan': ['nissan', 'dinissan'],
+    'chery': ['chery', 'auto vardi', 'autovardi'],
+    'renault': ['renault', 'sofasa'],
+    'chevrolet': ['chevrolet', 'general motors', 'gm', 'colmotores'],
+    'kia': ['kia', 'metrokia'],
+    'volkswagen': ['volkswagen', 'vw'],
+    'toyota': ['toyota', 'automotores toyota'],
+    'mg': ['mg', 'mg motor'],
+}
+_CARGOS = (
+    r'(?:ceo|cfo|coo|cmo|presidente|presidenta|vicepresidente|vicepresidenta|'
+    r'gerente|gerentes|director|directora|directores|directivo|directiva|directivos|'
+    r'vocero|vocera|voceros|representante|representantes|country manager|'
+    r'managing director|general manager|jefe|jefa|lider)'
+)
+_ENTIDAD = r'(?:la marca |la compania |la empresa |el grupo |la automotriz |la fabricante |la ensambladora )?'
+
+
+def _regex_marca(marca: str):
+    nombres = _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])
+    alt = '|'.join(re.escape(n) for n in nombres)
+    return re.compile(
+        r'\b' + _CARGOS + r'\b(?: \w+){0,5} (?:de|del|en|para) ' + _ENTIDAD + r'(?:' + alt + r')\b'
+        r'|\b(?:' + alt + r')\b(?: \w+){0,2},? (?:a traves de |por medio de |segun |con )?(?:su|sus) '
+        + _CARGOS + r'\b'
+    )
+
+
+# ── Descubrimiento de voceros dentro del dossier ─────────────────────────────
+# Si una nota dice "Ana Pérez, gerente general de Nissan Colombia" (o "el
+# gerente general de Nissan, Ana Pérez"), ese nombre queda como vocero de
+# Nissan para TODO el dossier: así se marcan también las notas donde solo
+# aparece "dijo Ana Pérez", aunque no repitan el cargo.
+_NOMBRE = r'([A-Z][a-z]+(?: (?:de la |de los |de las |del |de |dos |da )?[A-Z][a-z]+){1,3})'
+_NO_SON_NOMBRES = {
+    'el', 'la', 'los', 'las', 'en', 'de', 'del', 'por', 'para', 'con', 'segun', 'asi', 'este',
+    'esta', 'desde', 'durante', 'tras', 'ademas', 'sin', 'sobre', 'entre', 'cuando', 'como',
+    'colombia', 'bogota', 'medellin', 'cali', 'barranquilla', 'cartagena', 'bucaramanga',
+    'pereira', 'santa', 'san', 'estados', 'unidos', 'america', 'latina', 'mexico', 'peru',
+    'chile', 'ecuador', 'china', 'japon', 'corea', 'europa', 'grupo', 'salon', 'automovil',
+    'corferias', 'premios', 'feria', 'evento', 'motor', 'motors', 'nuevo', 'nueva',
+    # Rótulos que los medios ponen antes del nombre ("Declaración clave: ...").
+    'oficial', 'declaracion', 'declaraciones', 'clave', 'destaco', 'destaca', 'testimonio',
+    'testimonios', 'datos', 'dato', 'foto', 'video', 'fuente', 'entrevista', 'dijo', 'explico',
+}
+
+
+def _texto_sin_tildes(texto) -> str:
+    if not isinstance(texto, str):
+        return ''
+    texto = unicodedata.normalize('NFKD', texto)
+    texto = ''.join(c for c in texto if not unicodedata.combining(c))
+    return re.sub(r'\s+', ' ', texto)
+
+
+def _regex_descubrir(marca: str):
+    nombres = _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])
+    alt = '|'.join(re.escape(n) for n in nombres)
+    cargo_marca = (r'(?i:(?:el |la |su |nuevo |nueva |actual )?' + _CARGOS
+                   + r'\b(?: \w+){0,5} (?:de|del|en|para) ' + _ENTIDAD + r'(?:' + alt + r')\b(?: \w+){0,2})')
+    return re.compile(_NOMBRE + r', ' + cargo_marca + r'|' + cargo_marca + r',? ' + _NOMBRE + r'\b')
+
+
+def _limpiar_nombre(nombre: str) -> str:
+    """Quita palabras que no son de nombre al inicio ("En Bogota Ana Perez" -> "Ana Perez")
+    y devuelve '' si lo que queda no parece un nombre de persona (2+ palabras)."""
+    palabras = nombre.split()
+    # Fuera rótulos y restos de 1-2 letras al inicio ("Aa Felipe Negret", "Ma Lopez").
+    while palabras and (palabras[0].lower() in _NO_SON_NOMBRES | {'dos', 'da'} or len(palabras[0]) <= 2):
+        palabras.pop(0)
+    nucleo = [w for w in palabras if w.lower() not in ('de', 'del', 'dos', 'da', 'la', 'los', 'las')]
+    if len(nucleo) < 2 or any(w.lower() in _NO_SON_NOMBRES for w in nucleo):
+        return ''
+    return ' '.join(palabras)
+
+
+def descubrir_voceros(df) -> dict:
+    """{marca: [nombres]} hallados con cargo + marca en las notas no duplicadas."""
+    hallados = {}
+    if df.empty or 'Menciones - Empresa' not in df.columns:
+        return hallados
+    no_dup = ~df['is_duplicate'] if 'is_duplicate' in df.columns else pd.Series(True, index=df.index)
+    for marca_original, grupo in df[no_dup].groupby('Menciones - Empresa'):
+        marca = _texto_plano(marca_original)
+        if not marca:
+            continue
+        patron = _regex_descubrir(marca)
+        for _, fila in grupo.iterrows():
+            texto = _texto_sin_tildes(fila.get('Título', '')) + ' . ' + _texto_sin_tildes(fila.get('Resumen - Aclaracion', ''))
+            for m in patron.finditer(texto):
+                nombre = _limpiar_nombre((m.group(1) or m.group(2) or '').strip())
+                if nombre:
+                    lista = hallados.setdefault(str(marca_original).strip(), [])
+                    if nombre not in lista:
+                        lista.append(nombre)
+    return hallados
+
+
+def preparar_voceros(extra=None) -> dict:
+    """{marca normalizada: [regex de nombres]} a partir de VOCEROS_POR_MARCA + extra."""
+    combinados = {k: list(v) for k, v in VOCEROS_POR_MARCA.items()}
+    for marca, nombres in (extra or {}).items():
+        combinados.setdefault(_texto_plano(marca), []).extend(nombres)
+    out = {}
+    for marca, nombres in combinados.items():
+        limpios = sorted({_texto_plano(n) for n in nombres if _texto_plano(n)})
+        out[_texto_plano(marca)] = [re.compile(r'\b' + re.escape(n) + r'\b') for n in limpios]
+    return out
+
+
+def detecta_vocero(marca, titulo, resumen, voceros=None) -> bool:
+    marca = _texto_plano(marca)
+    if not marca:
+        return False
+    voceros = voceros if voceros is not None else preparar_voceros()
+    texto = _texto_plano(titulo) + ' . ' + _texto_plano(resumen)
+    if any(p.search(texto) for p in voceros.get(marca, [])):
+        return True
+    return bool(_regex_marca(marca).search(texto))
+
+
+def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descubrir=True):
+    """Aplica las reglas de negocio de arriba sobre Tono, Tema y Subtema.
+
+    Con descubrir=True suma los voceros hallados en el propio dossier (ver
+    descubrir_voceros); quedan en df.attrs['voceros_descubiertos'].
+    """
     df = df.copy()
+    extra = {k: list(v) for k, v in (voceros_extra or {}).items()}
+    descubiertos = descubrir_voceros(df) if descubrir else {}
+    for marca, nombres in descubiertos.items():
+        extra.setdefault(marca, []).extend(nombres)
+    voceros = preparar_voceros(extra)
+    tema_voceros = (final_topic_map or {}).get(SUBTEMA_VOCEROS, 'Indefinido')
     if df.empty:
         return df
     no_dup = ~df['is_duplicate'] if 'is_duplicate' in df.columns else pd.Series(True, index=df.index)
@@ -1028,11 +1253,16 @@ def aplicar_reglas_tono_tema(df):
                 valores = ('No aplica', 'Juan Carlos López', '-')
             elif marca in _MARCAS_JCL_POSITIVO:
                 valores = ('Positivo', 'Indefinido', 'Proyecciones - Balances')
+            elif detecta_vocero(marca, titulo, resumen, voceros):
+                valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
             else:
                 continue
+        elif detecta_vocero(marca, titulo, resumen, voceros):
+            valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
         else:
             continue
         df.loc[idx, ['Tono', 'Tema', SUBTEMA_COL]] = valores
+    df.attrs['voceros_descubiertos'] = descubiertos
     return df
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1184,6 +1414,10 @@ with st.expander("📋  Ver estructura requerida para la configuración en Googl
     | `INTERNET_CSV_URL` | `Internet` | Medio Original | Medio Mapeado |
     | `MENCIONES_CSV_URL` | `Menciones` | Mención Original | Mención Mapeada |
     | `MAPA_TEMAS_CSV_URL` | `Mapa_Temas` | Temas Generales - Tema | Tema |
+    | `VOCEROS_CSV_URL` *(opcional)* | `Voceros` | Marca | Nombre del vocero |
+
+    La hoja `Voceros` es opcional: suma nombres de CEOs, gerentes y voceros por marca
+    (además de los fijos en el código) para marcar sus notas en **Proyecciones - Balances**.
 
     Para publicar cada hoja: **Archivo > Compartir > Publicar en la web**, eliges la hoja
     específica, formato **CSV**, y copias la URL resultante (tipo
@@ -1304,7 +1538,12 @@ if start_clicked and files_loaded:
 
             # 5. Inteligencia Artificial
             df = classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar)
-            df = aplicar_reglas_tono_tema(df)
+            try:
+                voceros_extra = load_voceros_from_sheets()
+            except Exception:
+                voceros_extra = {}
+            df = aplicar_reglas_tono_tema(df, final_topic_map, voceros_extra)
+            voceros_descubiertos = df.attrs.get('voceros_descubiertos', {})
 
             # 6. Salida
             progress_bar.progress(95, text="Paso 7 / 7 — Generando archivo de salida...")
@@ -1323,6 +1562,7 @@ if start_clicked and files_loaded:
                 "total":    total,
                 "unique":   unique_count,
                 "dups":     dups_count,
+                "voceros":  voceros_descubiertos,
             }
 
             st.markdown(f"""
@@ -1351,6 +1591,16 @@ if start_clicked and files_loaded:
                 </div>
             </div>
             """, unsafe_allow_html=True)
+
+            if voceros_descubiertos:
+                with st.expander(f"🗣️ Voceros detectados en {label} (se marcaron en Proyecciones - Balances)"):
+                    st.caption("Hallados en este dossier por nombre + cargo + marca. "
+                               "Si alguno se repite, agrégalo a la hoja Voceros para los próximos dossiers.")
+                    st.dataframe(
+                        pd.DataFrame([{"Marca": m, "Vocero": n}
+                                      for m, ns in sorted(voceros_descubiertos.items()) for n in ns]),
+                        hide_index=True, use_container_width=True,
+                    )
         except Exception as e:
             st.error(f"**Error al procesar `{f.name}`:** {e}")
             continue

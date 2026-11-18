@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+tests/fixtures/*.xlsx
+tests/fixtures/*.xls
+tests/fixtures/*.csv
