@@ -90,8 +90,8 @@ class AplicarReglasTests(unittest.TestCase):
             {"Resumen - Aclaracion": resumen, "Menciones - Empresa": "Toyota"},
         ))
         self.assertEqual(self._valores(out), [
-            ("No aplica", "-", "-"),
-            ("No aplica", "-", "-"),
+            ("No aplica", "Juan Carlos López", "-"),
+            ("No aplica", "Juan Carlos López", "-"),
             ("Positivo", "Indefinido", "Proyecciones - Balances"),
             ("Positivo", "Indefinido", "Proyecciones - Balances"),
             ("Positivo", "Indefinido", "Proyecciones - Balances"),

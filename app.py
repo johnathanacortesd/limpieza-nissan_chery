@@ -922,8 +922,8 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #   2. Robo / hurto / delito
 #        -> Tono "No aplica", Tema "Orden público", Subtema "-".
 #   3. Nota que menciona a Juan Carlos López:
-#        - Menciones - Empresa Nissan o Chery -> Tono "No aplica", Tema "-",
-#          Subtema "-".
+#        - Menciones - Empresa Nissan o Chery -> Tono "No aplica",
+#          Tema "Juan Carlos López", Subtema "-".
 #        - AVATR, Changan o Deepal -> Tono "Positivo", Tema "Indefinido",
 #          Subtema "Proyecciones - Balances".
 # Accidentes y delitos se detectan por palabras clave, sin tildes ni
@@ -1025,7 +1025,7 @@ def aplicar_reglas_tono_tema(df):
             valores = ('No aplica', 'Orden público', '-')
         elif menciona_juan_carlos_lopez(titulo, resumen, fila.get('Autor - Conductor', '')):
             if marca in _MARCAS_JCL_NO_APLICA:
-                valores = ('No aplica', '-', '-')
+                valores = ('No aplica', 'Juan Carlos López', '-')
             elif marca in _MARCAS_JCL_POSITIVO:
                 valores = ('Positivo', 'Indefinido', 'Proyecciones - Balances')
             else:
