@@ -1069,32 +1069,33 @@ VOCEROS_POR_MARCA = {
     # presidentes de la casa matriz).
     'nissan': ['Leonardo Gutiérrez', 'Carlos Vargas', 'Ricardo Toro', 'Mauricio Salazar',
                'Carlos Felipe Caicedo', 'Iván Espinosa'],
-    'chery': ['María Cristina Castro', 'David Huertas', 'Carlos Urrego', 'Yin Tongyue'],
+    'chery': ['María Cristina Castro', 'David Huertas', 'Carlos Urrego', 'Yin Tongyue', 'Paola Vivas'],
     'renault': ['Juan Camilo Vélez', 'Paula Vargas García', 'Carlos Trivelin', 'François Provost',
-                'Fabrice Cambolive'],
+                'Fabrice Cambolive', 'Marcela Pérez', 'Juan David Colorado', 'Camilo Arango', 'Sara Betancur'],
     'chevrolet': ['Juan David Rosero', 'Thomas Owsianski', 'Mary Barra', 'Mark Reuss'],
     'toyota': ['Hiroshi Yonenaga', 'Kenta Kon', 'Koji Sato', 'Akio Toyoda'],
-    'kia': ['Jorge Neira', 'Carolina Suárez', 'Ho Sung Song', 'Song Ho-sung'],
-    'hyundai': ['Adriana Casadiego', 'José Muñoz', 'Euisun Chung', 'Chung Eui-sun'],
+    'kia': ['Jorge Neira', 'Carolina Suárez', 'Ho Sung Song', 'Song Ho-sung', 'Soohang Chang', 'Andrés Plata', 'Camila Márquez', 'Jaime Martínez'],
+    'hyundai': ['Adriana Casadiego', 'José Muñoz', 'Euisun Chung', 'Chung Eui-sun', 'Andrea Saldívar', 'Xavier Martinet'],
     'volkswagen': ['Jessica Passos', 'Jessica Rossini dos Passos', 'Juan Felipe Bedoya',
-                   'Oliver Blume', 'Thomas Schäfer'],
-    'byd': ['Juan Luis Mesa', 'Juan Pablo Molano', 'Marco Pastrana', 'Wang Chuanfu'],
+                   'Oliver Blume', 'Thomas Schäfer', 'Nathalie Ortiz'],
+    'byd': ['Juan Luis Mesa', 'Juan Pablo Molano', 'Marco Pastrana', 'Wang Chuanfu', 'Stella Li', 'Wolfgang Egger', 'Maritza Rincón'],
     # Tesla: toda nota de Tesla donde aparezca Musk va a Proyecciones - Balances.
-    'tesla': ['Karen Scarpetta', 'Elon Musk', 'Musk'],
+    'tesla': ['Karen Scarpetta', 'Elon Musk', 'Musk', 'Ashok Elluswamy'],
     'mg': ['Paola Ruiz', 'Ricardo Salazar'],
     'geely': ['Diego Zárate', 'Li Shufu', 'Gan Jiayue', 'Gui Shengyue'],
     'farizon': ['Felipe Negret'],
-    'ford': ['José Llanos', 'Jim Farley'],
-    'volvo': ['Alberto Telch', 'Ángela Bolívar', 'Håkan Samuelsson', 'Klaus Zellmer'],
+    'ford': ['José Llanos', 'Jim Farley', 'Guillermo Lastra'],
+    'volvo': ['Alberto Telch', 'Ángela Bolívar', 'Håkan Samuelsson', 'Klaus Zellmer', 'Luis Pinto'],
     'suzuki': ['Verónica Borrero', 'Juan José Orozco', 'Juan David Uribe', 'Toshihiro Suzuki'],
-    'xpeng': ['Nicolás Muñoz', 'He Xiaopeng'],
-    'zeekr': ['José Luis Porras', 'An Conghui', 'Gan Jiayue'],
+    'xpeng': ['Nicolás Muñoz', 'He Xiaopeng', 'Brian Gu'],
+    'zeekr': ['José Luis Porras', 'An Conghui', 'Gan Jiayue', 'Sebastián Gómez'],
     'jmc': ['Noel Ardila'],
     'jetour': ['Juan Diego Galindo', 'Andrés Felipe Naranjo'],
-    'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson', 'Masahiro Moro'],
-    'changan': ['Zhu Huarong'],
+    'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson', 'Masahiro Moro', 'Miguel Barbeyto', 'Ryuichi Umeshita'],
+    'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo'],
     'deepal': ['Deng Chenghao'],
     'avatr': ['Zhu Huarong', 'Chen Zhuo'],
+    'icaur': ['Paola Vivas'],
 }
 # Nombres con que aparece cada marca en el texto (sin tildes, minúsculas),
 # incluido su distribuidor cuando representa solo a esa marca. Los grupos con
@@ -1142,6 +1143,9 @@ _NO_SON_NOMBRES = {
     'pereira', 'santa', 'san', 'estados', 'unidos', 'america', 'latina', 'mexico', 'peru',
     'chile', 'ecuador', 'china', 'japon', 'corea', 'europa', 'grupo', 'salon', 'automovil',
     'corferias', 'premios', 'feria', 'evento', 'motor', 'motors', 'nuevo', 'nueva',
+    # Rótulos que los medios ponen antes del nombre ("Declaración clave: ...").
+    'oficial', 'declaracion', 'declaraciones', 'clave', 'destaco', 'destaca', 'testimonio',
+    'testimonios', 'datos', 'dato', 'foto', 'video', 'fuente', 'entrevista', 'dijo', 'explico',
 }
 
 
@@ -1165,7 +1169,8 @@ def _limpiar_nombre(nombre: str) -> str:
     """Quita palabras que no son de nombre al inicio ("En Bogota Ana Perez" -> "Ana Perez")
     y devuelve '' si lo que queda no parece un nombre de persona (2+ palabras)."""
     palabras = nombre.split()
-    while palabras and palabras[0].lower() in _NO_SON_NOMBRES | {'dos', 'da'}:
+    # Fuera rótulos y restos de 1-2 letras al inicio ("Aa Felipe Negret", "Ma Lopez").
+    while palabras and (palabras[0].lower() in _NO_SON_NOMBRES | {'dos', 'da'} or len(palabras[0]) <= 2):
         palabras.pop(0)
     nucleo = [w for w in palabras if w.lower() not in ('de', 'del', 'dos', 'da', 'la', 'los', 'las')]
     if len(nucleo) < 2 or any(w.lower() in _NO_SON_NOMBRES for w in nucleo):

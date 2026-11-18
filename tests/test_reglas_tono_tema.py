@@ -232,6 +232,19 @@ class DescubrirVocerosTests(unittest.TestCase):
             hallados = R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto}))
             self.assertIn(esperado, hallados.get("Nissan", []), texto)
 
+    def test_quita_rotulos_pegados_al_nombre(self):
+        casos = {
+            "Declaración Clave Andrea Saldívar, gerente de Mercadeo de Hyundai Colombia, habló.": ("Hyundai", "Andrea Saldivar"),
+            "Oficial Juan Pérez, gerente general de Chery, habló.": ("Chery", "Juan Perez"),
+            "Aa Felipe Negret, gerente general de Farizon en Grupo Vardí.": ("Farizon", "Felipe Negret"),
+        }
+        for texto, (marca, esperado) in casos.items():
+            hallados = R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca}))
+            self.assertEqual(hallados.get(marca), [esperado], texto)
+        for texto, marca in (("Ma López, vicepresidente del Centro de Diseño de XPENG.", "Xpeng"),
+                             ("La directora de mercadeo de iCAUR para Colombia Datos Clave", "iCAUR")):
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca})), {}, texto)
+
     def test_no_descubre_lugares_ni_cargos_de_otra_marca(self):
         textos = [
             "Bogotá Colombia, gerente de Nissan, no es un nombre.",
