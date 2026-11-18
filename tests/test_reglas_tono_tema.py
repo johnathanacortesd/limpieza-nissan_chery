@@ -46,7 +46,12 @@ class DeteccionTests(unittest.TestCase):
             self.assertTrue(es_accidente(t, ""), t)
 
     def test_accidente_en_resumen_necesita_dos_senales(self):
-        self.assertTrue(es_accidente("Tragedia en Boyacá", "Un bus chocó contra un camión y dos personas murieron."))
+        self.assertTrue(es_accidente("Tragedia en Boyacá",
+                                     "Grave accidente: un bus chocó contra un camión y dos personas murieron."))
+        # Una sola palabra fuerte en el resumen ya no basta (calibrado con la base de nov. 2026).
+        self.assertFalse(es_accidente("Tragedia en Boyacá", "Un bus chocó contra un camión y dos personas murieron."))
+        self.assertFalse(es_accidente("Volvo reafirma su promesa de seguridad",
+                                      "Volvo busca reducir los heridos en accidentes de tránsito en la carretera."))
         self.assertFalse(es_accidente("Nuevo Nissan Kicks", "El SUV se presentó tras el accidente comercial de 2020."))
 
     def test_producto_no_es_accidente(self):
@@ -55,17 +60,29 @@ class DeteccionTests(unittest.TestCase):
             "Nissan presenta su nuevo sistema de seguridad",
             "El asistente de frenado ayuda a evitar accidentes y la alerta de colisión frontal avisa al conductor."))
         self.assertFalse(es_accidente("Murió el fundador de una marca de carros", ""))
+        self.assertFalse(es_accidente("Cupra León VZ y Golf GTI suman sistemas que evitan choques", ""))
+        self.assertFalse(es_accidente("Volvo exhibe un vehículo accidentado en el Salón del Automóvil", ""))
 
     def test_delitos(self):
         for t in ("Capturan banda dedicada al hurto de camionetas en Bogotá",
                   "Aumenta el robo de vehículos en Colombia",
                   "Desmantelan red de delincuentes que vendía autopartes robadas"):
             self.assertTrue(es_delito(t, ""), t)
-        self.assertTrue(es_delito("Operativo en Cali", "La Policía recuperó tres carros hurtados."))
+        for t in ("Buscan a dos mujeres desaparecidas en Barranquilla",
+                  "Investigan homicidio de un hombre dentro de un vehículo en Medellín",
+                  "Secuestrada la gestora social de Uribia",
+                  "Incendio en establecimiento comercial de Cartagena",
+                  "Delincuentes armados perpetraron millonario robo en el oriente de Cali"):
+            self.assertTrue(es_delito(t, ""), t)
+        # En el resumen hace falta mucha evidencia: una mención suelta no basta.
+        self.assertFalse(es_delito("Operativo en Cali", "La Policía recuperó tres carros hurtados."))
+        self.assertTrue(es_delito("Resumen de noticias", "Robo, hurto de motos, un secuestro y un homicidio: "
+                                  "la Policía y la Fiscalía capturaron a los delincuentes."))
 
     def test_producto_no_es_delito(self):
         self.assertFalse(es_delito("Nissan estrena sistema antirrobo en la Frontier", ""))
         self.assertFalse(es_delito("Tesla capturó el 30 % del mercado", "La marca lidera ventas."))
+        self.assertFalse(es_delito("Con 57 años y 1,7 millones de carros armados, Renault usa su planta", ""))
 
 
 class AplicarReglasTests(unittest.TestCase):

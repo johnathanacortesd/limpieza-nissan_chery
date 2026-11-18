@@ -958,14 +958,15 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 # mayúsculas. Hay palabras "fuertes" (accidente, choque, volcamiento,
 # robo, hurto...) y "de apoyo" (murió, heridos, capturado...):
 #   - Título: basta una palabra fuerte.
-#   - Resumen: hacen falta 2 palabras distintas y al menos una fuerte.
+#   - Resumen: accidente con 2 palabras fuertes distintas (3 señales en total);
+#     orden público con 4 fuertes (6 en total). Ver es_accidente / es_delito.
 # Antes de buscar se quitan frases de producto que no son noticias de un
 # accidente o un delito ("pruebas de choque", "evitar accidentes",
 # "alerta de colisión", "sistema antirrobo"...).
 SUBTEMA_COL = 'Temas Generales - Tema'
 
 _ACCIDENTE_FUERTES = [
-    r'accidentes?', r'accidentad[oa]s?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
+    r'accidentes?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
     r'chocaron', r'colisiono', r'colisionaron', r'volcamientos?', r'se volco', r'volco',
     r'atropell\w*', r'arrollad[oa]s?', r'arrollo', r'se estrell\w*', r'estrello',
     r'(?:rodo|cayo|cayeron|rodaron) (?:a|por) un (?:abismo|precipicio)', r'tragedia vial',
@@ -974,7 +975,8 @@ _ACCIDENTE_FUERTES = [
 _ACCIDENTE_APOYO = [
     r'perdio la vida', r'perdieron la vida', r'(?:resulto|resultaron|quedo|quedaron) herid[oa]s?',
     r'herid[oa]s?', r'murio', r'murieron', r'muert[oa]s?', r'fallecid[oa]s?', r'transito',
-    r'via\b', r'carretera', r'motociclista', r'peaton(?:es)?', r'conductor(?:a|es)?',
+    r'via\b', r'carretera', r'motociclistas?', r'peaton(?:es)?', r'conductor(?:a|es)?',
+    r'accidentad[oa]s?', r'fallece', r'fallecio',
 ]
 _DELITO_FUERTES = [
     r'robos?', r'roban', r'robaron', r'robad[oa]s?', r'hurtos?', r'hurtad[oa]s?', r'hurtaron',
@@ -982,14 +984,20 @@ _DELITO_FUERTES = [
     r'asaltaron', r'fleteo', r'extorsion\w*', r'secuestr\w*', r'homicidios?', r'sicari\w*',
     r'bandas? (?:criminal(?:es)?|delincuencial(?:es)?)', r'receptacion', r'contrabando',
     r'estafas?', r'estafador\w*',
+    # Orden público en sentido amplio (base revisada de noviembre de 2026):
+    r'desaparecid[oa]s?', r'desaparicion(?:es)?', r'atentados?', r'asesinat\w*', r'asesin[oa]s?',
+    r'balead[oa]s?', r'balacera', r'sin vida', r'tras las rejas', r'ataque armado',
+    r'(?:hombres|sujetos|grupos?|delincuentes) armad[oa]s', r'incendios?', r'se incendio',
+    r'conflagracion', r'gaula', r'masacre', r'amenazas? de muerte', r'capturad[oa]s?', r'capturaron',
 ]
 _DELITO_APOYO = [
-    r'capturad[oa]s?', r'capturaron', r'captura', r'desmantel\w*', r'policia', r'fiscalia',
-    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*',
+    r'captura', r'desmantel\w*', r'policia', r'fiscalia', r'carcel', r'prision',
+    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*', r'recompensa', r'bomberos',
+    r'victimas?', r'liberacion',
 ]
 _FRASES_NEUTRAS = [
     r'pruebas? de (?:choque|impacto|colision)', r'crash ?tests?', r'latin ?ncap', r'euro ?ncap',
-    r'(?:evitar|evita|prevenir|previene|reducir|reduce|mitigar|mitiga|prevencion de|riesgo de)'
+    r'(?:evitar|evita|evitan|prevenir|previene|previenen|reducir|reduce|reducen|mitigar|mitiga|prevencion de|riesgo de)'
     r' (?:los |las |un |una )?(?:accidentes?|choques?|colisiones?)',
     r'(?:alerta|aviso|advertencia|frenado|asistente|sistema|mitigacion) (?:de|ante|contra)'
     r' (?:\w+ ){0,2}(?:colision\w*|choques?|impactos?)',
@@ -1014,22 +1022,26 @@ def _texto_plano(texto) -> str:
     return re.sub(r'\s+', ' ', texto.lower()).strip()
 
 
-def _es_tema(titulo, resumen, fuertes, apoyo) -> bool:
+def _es_tema(titulo, resumen, fuertes, apoyo, min_fuertes, min_total) -> bool:
     titulo = _RE_NEUTRAS.sub(' ', _texto_plano(titulo))
     if any(p.search(titulo) for p in fuertes):
         return True
     resumen = _RE_NEUTRAS.sub(' ', _texto_plano(resumen))
     n_fuertes = sum(1 for p in fuertes if p.search(resumen))
     n_apoyo = sum(1 for p in apoyo if p.search(resumen))
-    return n_fuertes >= 1 and n_fuertes + n_apoyo >= 2
+    return n_fuertes >= min_fuertes and n_fuertes + n_apoyo >= min_total
 
 
+# Umbrales para el RESUMEN, calibrados con la base revisada "Base Nissan - 09
+# al 15 de noviembre" (2026): con menos exigencia se marcaban como accidente u
+# orden público notas buenas (campañas de seguridad de Volvo, fin de la
+# Cybertruck, resúmenes de noticieros que nombran un choque de pasada).
 def es_accidente(titulo, resumen) -> bool:
-    return _es_tema(titulo, resumen, _RE_ACC_F, _RE_ACC_A)
+    return _es_tema(titulo, resumen, _RE_ACC_F, _RE_ACC_A, min_fuertes=2, min_total=3)
 
 
 def es_delito(titulo, resumen) -> bool:
-    return _es_tema(titulo, resumen, _RE_DEL_F, _RE_DEL_A)
+    return _es_tema(titulo, resumen, _RE_DEL_F, _RE_DEL_A, min_fuertes=4, min_total=6)
 
 
 def menciona_juan_carlos_lopez(*textos) -> bool:
