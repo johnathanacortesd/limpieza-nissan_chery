@@ -97,7 +97,6 @@ class DeteccionTests(unittest.TestCase):
         for t in ("Buscan a dos mujeres desaparecidas en Barranquilla",
                   "Investigan homicidio de un hombre dentro de un vehículo en Medellín",
                   "Secuestrada la gestora social de Uribia",
-                  "Incendio en establecimiento comercial de Cartagena",
                   "Delincuentes armados perpetraron millonario robo en el oriente de Cali"):
             self.assertTrue(es_delito(t, ""), t)
         # En el resumen hace falta mucha evidencia: una mención suelta no basta.
@@ -550,6 +549,53 @@ class ListaDeMarcasTests(unittest.TestCase):
         for marca in ("AVATR", "Deepal", "Changan"):
             self.assertTrue(detecta_vocero(marca, "", otra), marca)
         self.assertFalse(detecta_vocero("Nissan", "", "El CEO de Tesla y Nissan anunciaron una alianza."))
+
+class SorteosKiaCenterIncendiosTests(unittest.TestCase):
+    def _valores(self, df):
+        return list(zip(df["Tono"], df["Tema"], df[SUB]))
+
+    def test_incendios_y_llamas_son_accidentes(self):
+        for t in ("Incendio en establecimiento comercial de Cartagena", "Camioneta se incendió en la autopista Norte",
+                  "Bus quedó en llamas en la vía al Llano", "Hallan carro calcinado en Soacha",
+                  "Siniestros viales dejan 12 muertos en el puente festivo"):
+            self.assertTrue(es_accidente(t, ""), t)
+            self.assertFalse(es_delito(t, "") and not es_accidente(t, ""), t)
+        out = aplicar(_df({"Título": "Incendio en un parqueadero de Bogotá consumió tres carros"}))
+        self.assertEqual(self._valores(out), [("No aplica", "Accidentes", "-")])
+
+    def test_riesgo_de_incendio_no_es_accidente(self):
+        for t in ("Llamado a revisión por riesgo de incendio en la batería del Kona",
+                  "El EV9 trae sistema contra incendios en la batería"):
+            self.assertFalse(es_accidente(t, ""), t)
+
+    def test_robos_hurtos_atentados_son_orden_publico(self):
+        for t in ("Atentado con explosivos contra un concesionario en Cali", "Hurto de camionetas en Medellín",
+                  "Roban un Toyota Prado en el norte de Bogotá"):
+            out = aplicar(_df({"Título": t, "Menciones - Empresa": "Toyota"}))
+            self.assertEqual(self._valores(out), [("No aplica", "Orden público", "-")], t)
+
+    def test_sorteos(self):
+        for t in ("Esto podría comprar en Colombia el ganador de los $5.600 millones del Baloto",
+                  "Salón del Automóvil 2026: Corferias sorteará viaje a la Fórmula 1",
+                  "Resultados de la Lotería de Bogotá", "Concurso para ganarse un Kia Picanto"):
+            out = aplicar(_df({"Título": t, "Menciones - Empresa": "Renault"}))
+            self.assertEqual(self._valores(out), [("No aplica", "Sorteos", "-")], t)
+        # En el resumen hacen falta dos palabras fuertes distintas.
+        self.assertTrue(R["es_sorteo"]("Navidad en Unicentro", "Habrá un concurso y un sorteo de premios."))
+        self.assertFalse(R["es_sorteo"]("Navidad en Unicentro", "Los visitantes podrán participar en un concurso."))
+        for t in ("Las tarifas de parqueo suben en Bogotá", "Hay chance de que Toyota lidere el mercado"):
+            self.assertFalse(R["es_sorteo"](t, ""), t)
+
+    def test_kia_center(self):
+        resumen = "Fonseca se presentó en el Kia Center de Orlando durante los Latin Grammy."
+        out = aplicar(_df({"Resumen - Aclaracion": resumen, "Menciones - Empresa": "Kia"},
+                          {"Resumen - Aclaracion": resumen, "Menciones - Empresa": "Toyota"},
+                          {"Título": "KIA CENTER recibe el concierto", "Menciones - Empresa": "Kia"},
+                          {"Resumen - Aclaracion": "Kia presentó el EV5 en Bogotá.", "Menciones - Empresa": "Kia"}))
+        self.assertEqual(self._valores(out), [("No aplica", "Kia Center", "-"),
+                                              ("Neutro", "Tecnológico", "Electrificación"),
+                                              ("No aplica", "Kia Center", "-"),
+                                              ("Neutro", "Tecnológico", "Electrificación")])
 
 class AliasMarcaTests(unittest.TestCase):
     def test_jetour_nissan_pasa_a_jetour(self):

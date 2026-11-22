@@ -972,10 +972,14 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 # ──────────────────────────────────────────────────────────────────────────────
 # Reglas del usuario (2026-11-18). Se aplican solo a las notas no duplicadas y
 # reemplazan lo que dio el modelo PKL. Orden de prioridad:
-#   1. Accidente (de tránsito, choque, volcamiento, atropello...)
-#        -> Tono "No aplica", Tema "Accidentes", Subtema "-".
-#   2. Robo / hurto / delito
+#   0. Menciones - Empresa Kia y la nota nombra el "Kia Center" (arena de
+#      Orlando) -> Tono "No aplica", Tema "Kia Center", Subtema "-".
+#   1. Accidente (de tránsito, choque, volcamiento, atropello, incendio,
+#      emergencia natural...) -> Tono "No aplica", Tema "Accidentes", Subtema "-".
+#   2. Robo / hurto / atentado / delito
 #        -> Tono "No aplica", Tema "Orden público", Subtema "-".
+#   2b. Sorteo / lotería / concurso (Baloto, rifas...)
+#        -> Tono "No aplica", Tema "Sorteos", Subtema "-".
 #   3. Nota que menciona a Juan Carlos López:
 #        - Menciones - Empresa Nissan o Chery -> Tono "No aplica",
 #          Tema "Juan Carlos López", Subtema "-".
@@ -1028,13 +1032,16 @@ _ACCIDENTE_FUERTES = [
     r'emergencia invernal', r'ola invernal', r'creciente subita', r'vendavales?',
     r'tras (?:las |los |la |el |fuertes )?(?:inundaciones|granizadas?)',
     r'(?:reportaron|quedaron|resultaron|terminaron|fueron) (?:\w+ ){0,2}(?:inundad|arrastrad|sepultad)\w*',
+    # Incendios (regla del 2026-11-22: van a Accidentes, no a Orden público).
+    r'incendios?', r'se incendi\w*', r'incendiad[oa]s?', r'conflagracion', r'calcinad[oa]s?',
+    r'(?:quedo|quedaron|termino|terminaron|ardio|ardieron) en llamas',
 ]
 _ACCIDENTE_APOYO = [
     r'perdio la vida', r'perdieron la vida', r'(?:resulto|resultaron|quedo|quedaron) herid[oa]s?',
     r'herid[oa]s?', r'murio', r'murieron', r'muert[oa]s?', r'fallecid[oa]s?', r'transito',
     r'via\b', r'carretera', r'motociclistas?', r'peaton(?:es)?', r'conductor(?:a|es)?',
     r'accidentad[oa]s?', r'fallece', r'fallecio',
-    r'en llamas', r'incendio', r'inundaci\w*', r'inundad[oa]s?', r'lluvias?',
+    r'en llamas', r'bomberos', r'inundaci\w*', r'inundad[oa]s?', r'lluvias?',
     r'quebradas?', r'damnificad[oa]s?', r'afectaciones', r'danos materiales', r'emergencias?',
     r'precipitaciones',
 ]
@@ -1047,12 +1054,11 @@ _DELITO_FUERTES = [
     # Orden público en sentido amplio (base revisada de noviembre de 2026):
     r'desaparecid[oa]s?', r'desaparicion(?:es)?', r'atentados?', r'asesinat\w*', r'asesin[oa]s?',
     r'balead[oa]s?', r'balacera', r'sin vida', r'tras las rejas', r'ataque armado',
-    r'(?:hombres|sujetos|grupos?|delincuentes) armad[oa]s', r'incendios?', r'se incendio',
-    r'conflagracion', r'gaula', r'masacre', r'amenazas? de muerte', r'capturad[oa]s?', r'capturaron',
+    r'(?:hombres|sujetos|grupos?|delincuentes) armad[oa]s', r'gaula', r'masacre', r'amenazas? de muerte', r'capturad[oa]s?', r'capturaron',
 ]
 _DELITO_APOYO = [
     r'captura', r'desmantel\w*', r'policia', r'fiscalia', r'carcel', r'prision',
-    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*', r'recompensa', r'bomberos',
+    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*', r'recompensa',
     r'victimas?', r'liberacion',
 ]
 _FRASES_NEUTRAS = [
@@ -1062,6 +1068,10 @@ _FRASES_NEUTRAS = [
     r'(?:alerta|aviso|advertencia|frenado|asistente|sistema|mitigacion) (?:de|ante|contra)'
     r' (?:\w+ ){0,2}(?:colision\w*|choques?|impactos?)',
     r'antirrobo', r'contra robos?', r'seguro contra \w+',
+    # Recalls y equipos: "riesgo de incendio", "sistema contra incendios".
+    r'(?:riesgos?|peligro|prevencion|prevenir|evitar|extintor\w*|extincion|sistemas?|resistencia|propagacion)'
+    r' (?:de|del|contra|al|a) (?:un |los |las )?(?:posibles? )?(?:incendios?|fuego)',
+    r'contra (?:incendios?|el fuego)',
     # Pruebas y argumentos de seguridad: "protección ante un accidente de gran impacto".
     r'(?:ante|en caso de|frente a|para) (?:un |una )?(?:posible |eventual )?(?:accidentes?|choques?|colision\w*|impactos?)',
 ]
@@ -1070,6 +1080,35 @@ _RE_ACC_F, _RE_ACC_A = _RE(_ACCIDENTE_FUERTES), _RE(_ACCIDENTE_APOYO)
 _RE_DEL_F, _RE_DEL_A = _RE(_DELITO_FUERTES), _RE(_DELITO_APOYO)
 _RE_NEUTRAS = re.compile(r'\b(?:' + '|'.join(_FRASES_NEUTRAS) + r')\b')
 _RE_JUAN_CARLOS_LOPEZ = re.compile(r'\bjuan carlos lopez\b')
+
+# Sorteos, loterías y concursos (regla del 2026-11-22) -> No aplica / Sorteos / -.
+# Mismo esquema: en el título basta una palabra fuerte; en el resumen, 2
+# fuertes distintas y 3 señales en total.
+_SORTEO_FUERTES = [
+    r'baloto', r'miloto', r'colorloto', r'loterias?', r'sorte(?:o|os|a|an|ara|aran|aron|ando)',
+    r'rifas?', r'rifara', r'rifaran', r'rifo', r'concursos?', r'premio mayor', r'super astro',
+    r'acumulado del \w+', r'raspa y gana', r'(?:boleta|boleto|billete) ganador\w*',
+]
+_SORTEO_APOYO = [
+    r'ganador(?:a|es|as)?', r'acumulado', r'premios?', r'boletas?', r'boletos?', r'participantes?',
+    r'participa\w*', r'inscri\w*', r'resultados?', r'numeros?', r'millones', r'chance',
+]
+_RE_SORT_F, _RE_SORT_A = _RE(_SORTEO_FUERTES), _RE(_SORTEO_APOYO)
+TEMA_SORTEOS = 'Sorteos'
+
+
+def es_sorteo(titulo, resumen) -> bool:
+    return _es_tema(titulo, resumen, _RE_SORT_F, _RE_SORT_A, min_fuertes=2, min_total=3)
+
+
+# Kia Center: arena de Orlando; la nota no es de la marca (regla del 2026-11-22).
+_RE_KIA_CENTER = re.compile(r'\bkia (?:center|centre)\b')
+TEMA_KIA_CENTER = 'Kia Center'
+
+
+def menciona_kia_center(*textos) -> bool:
+    return any(_RE_KIA_CENTER.search(_texto_plano(t)) for t in textos)
+
 
 _MARCAS_JCL_NO_APLICA = {'nissan', 'chery'}
 _MARCAS_JCL_POSITIVO  = {'avatr', 'changan', 'deepal'}
@@ -1560,10 +1599,14 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
         titulo, resumen = fila.get('Título', ''), fila.get('Resumen - Aclaracion', '')
         marca = str(fila.get('Menciones - Empresa', '') or '').strip().lower()
 
-        if es_accidente(titulo, resumen):
+        if marca == 'kia' and menciona_kia_center(titulo, resumen):
+            valores = ('No aplica', TEMA_KIA_CENTER, '-')
+        elif es_accidente(titulo, resumen):
             valores = ('No aplica', 'Accidentes', '-')
         elif es_delito(titulo, resumen):
             valores = ('No aplica', 'Orden público', '-')
+        elif es_sorteo(titulo, resumen):
+            valores = ('No aplica', TEMA_SORTEOS, '-')
         elif menciona_juan_carlos_lopez(titulo, resumen, fila.get('Autor - Conductor', '')):
             if marca in _MARCAS_JCL_NO_APLICA:
                 valores = ('No aplica', 'Juan Carlos López', '-')
