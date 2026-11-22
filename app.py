@@ -890,6 +890,34 @@ def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 LABEL_MAP_TONO = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo',
                   '1': 'Positivo', '0': 'Neutro', '-1': 'Negativo'}
 
+def segunda_opcion_tema(topic_pipeline, textos):
+    """Tema que el modelo daría si no pudiera elegir Proyecciones - Balances.
+
+    Proyecciones - Balances solo vale con vocero de la marca (ver
+    aplicar_reglas_tono_tema); cuando el modelo lo predice y no hay vocero, la
+    nota toma este tema. Usa decision_function (LinearSVC) o predict_proba.
+    """
+    textos = pd.Series(textos)
+    respaldo = pd.Series(['Mención'] * len(textos), index=textos.index)
+    if textos.empty:
+        return respaldo
+    try:
+        if hasattr(topic_pipeline, 'decision_function'):
+            puntajes = np.asarray(topic_pipeline.decision_function(textos))
+        else:
+            puntajes = np.asarray(topic_pipeline.predict_proba(textos))
+        clases = np.asarray(topic_pipeline.classes_)
+    except Exception:
+        return respaldo
+    if puntajes.ndim != 2 or puntajes.shape[1] != len(clases):
+        return respaldo
+    validas = ~np.isin(clases, list(SUBTEMAS_PROYECCIONES))
+    if not validas.any():
+        return respaldo
+    puntajes = np.where(validas, puntajes, -np.inf)
+    return pd.Series(clases[puntajes.argmax(axis=1)], index=textos.index)
+
+
 def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar):
     df = df.copy()
     mask_unique = ~df['is_duplicate']
@@ -912,12 +940,13 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
     progress_bar.progress(72, text="Paso 6 / 7 — Clasificando temas con modelo PKL...")
     df_valid['_resumen_procesado'] = df_valid['_texto_ia'].apply(preprocess_text_for_topic)
     df_valid['Temas Generales - Tema'] = topic_pipeline.predict(df_valid['_resumen_procesado'])
+    df_valid[COL_SUBTEMA_ALTERNATIVO] = segunda_opcion_tema(topic_pipeline, df_valid['_resumen_procesado'])
 
     df_valid['_titulo_norm'] = df_valid['Título'].apply(normalize_title_for_comparison)
-    homo = df_valid.groupby('_titulo_norm')['Temas Generales - Tema'].transform(
-        lambda x: x.mode()[0] if not x.mode().empty else x
-    )
-    df_valid['Temas Generales - Tema'] = homo
+    for col in ('Temas Generales - Tema', COL_SUBTEMA_ALTERNATIVO):
+        df_valid[col] = df_valid.groupby('_titulo_norm')[col].transform(
+            lambda x: x.mode()[0] if not x.mode().empty else x
+        )
 
     df_valid['Tema'] = (
         df_valid['Temas Generales - Tema'].astype(str).str.strip()
@@ -927,7 +956,8 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 
     df_valid.drop(columns=['_texto_ia', '_resumen_procesado', '_titulo_norm'], inplace=True)
 
-    df.update(df_valid[['Tono', 'Temas Generales - Tema', 'Tema']])
+    df[COL_SUBTEMA_ALTERNATIVO] = ''
+    df.update(df_valid[['Tono', 'Temas Generales - Tema', 'Tema', COL_SUBTEMA_ALTERNATIVO]])
 
     mask_dup = df['is_duplicate']
     if mask_dup.any():
@@ -959,6 +989,11 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #      vocero; "representante", "jefe", "líder" y los plurales solo con nombre)
 #        -> Subtema "Proyecciones - Balances" y su Tema según Mapa_Temas
 #           (Indefinido); el Tono del PKL se conserva. Ver detecta_vocero().
+#   6. El modelo PKL predijo "Proyecciones - Balances" pero no hay vocero de
+#      la marca (regla del 2026-11-22: "Autofinanciera... según su
+#      vicepresidente" no es Proyecciones de Chevrolet)
+#        -> Subtema = segunda opción del modelo (segunda_opcion_tema) y su Tema
+#           según Mapa_Temas; el Tono se conserva.
 # Accidentes y delitos se detectan por palabras clave, sin tildes ni
 # mayúsculas. Hay palabras "fuertes" (accidente, choque, volcamiento,
 # robo, hurto...) y "de apoyo" (murió, heridos, capturado...):
@@ -972,6 +1007,9 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 # accidente o un delito ("pruebas de choque", "evitar accidentes",
 # "alerta de colisión", "protección ante un accidente", "sistema antirrobo"...).
 SUBTEMA_COL = 'Temas Generales - Tema'
+SUBTEMAS_PROYECCIONES = {'Proyecciones - Balances', 'Proyecciones -Balances'}
+# Columna interna (no sale en el Excel): segunda opción del modelo de temas.
+COL_SUBTEMA_ALTERNATIVO = '_subtema_alternativo'
 
 _ACCIDENTE_FUERTES = [
     r'accidentes?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
@@ -1130,9 +1168,10 @@ VOCEROS_POR_MARCA = {
     'jmc': ['Noel Ardila'],
     'jetour': ['Juan Diego Galindo', 'Andrés Felipe Naranjo'],
     'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson', 'Masahiro Moro', 'Miguel Barbeyto', 'Ryuichi Umeshita'],
-    'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo'],
-    'deepal': ['Deng Chenghao'],
-    'avatr': ['Zhu Huarong', 'Chen Zhuo'],
+    # Cristhian Camelo: director de mercadeo de AVATR, Deepal, NEVO y Changan Colombia.
+    'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo', 'Cristhian Camelo', 'Cristian Camilo Camelo'],
+    'deepal': ['Deng Chenghao', 'Cristhian Camilo Camelo', 'Cristhian Camelo', 'Cristian Camilo Camelo'],
+    'avatr': ['Zhu Huarong', 'Chen Zhuo', 'Cristhian Camilo Camelo', 'Cristhian Camelo', 'Cristian Camilo Camelo'],
     'icaur': ['Paola Vivas', 'Hernán Novoa'],
 }
 # Nombres con que aparece cada marca en el texto (sin tildes, minúsculas),
@@ -1161,7 +1200,7 @@ _OTRAS_MARCAS = {
     'dongfeng', 'baic', 'great', 'wall', 'leapmotor', 'gac', 'aion', 'hongqi', 'opel', 'skoda',
     'lynk', 'polestar', 'smart', 'rivian', 'lucid', 'nio', 'xiaomi', 'huawei', 'seres', 'kaiyi',
     'astara', 'inchcape', 'vardi', 'autogermana', 'praco', 'didacol', 'derco', 'andemos', 'fenalco',
-    'andi', 'asopartes', 'ferrari', 'lamborghini', 'maserati',
+    'andi', 'asopartes', 'ferrari', 'lamborghini', 'maserati', 'nevo',
 }
 _MODELOS = {
     'hilux', 'frontier', 'kicks', 'versa', 'sentra', 'march', 'qashqai', 'leaf', 'patrol', 'tiggo',
@@ -1269,10 +1308,20 @@ def _alt_marca(marca: str) -> str:
     return r'(?:' + '|'.join(re.escape(n) for n in nombres) + r')\b'
 
 
+def _lista_de_marcas(marca: str) -> str:
+    """Otras marcas antes de la de la fila, en una lista con comas: 'director de mercadeo
+    de AVATR, Deepal, NEVO y Changan' cuenta para las cuatro. Sin coma no ('el CEO de
+    Tesla y Nissan anunciaron...' no es cargo en Nissan)."""
+    propias = set(_NOMBRES_MARCA_EN_TEXTO.get(marca, [marca]))
+    otras = sorted((a for a in _alias_todas_las_marcas() if a not in propias), key=len, reverse=True)
+    alt = r'(?:' + '|'.join(re.escape(a) for a in otras) + r')'
+    return r'(?:(?:' + alt + r', ){1,5}(?:' + alt + r' (?:y|e) )?)?'
+
+
 def _cargo_de_marca(marca: str, cargo_inicial: str) -> str:
     """Cargo + área/país + marca: 'gerente general de Nissan', 'CEO de la marca Chery'."""
     return (_cadena_cargos(cargo_inicial) + _HUECO
-            + r' (?:(?:de|del|en|para) ' + _ENTIDAD + r')?' + _alt_marca(marca))
+            + r' (?:(?:de|del|en|para) ' + _ENTIDAD + r')?' + _lista_de_marcas(marca) + _alt_marca(marca))
 
 
 def _su_cargo(marca: str, cargo_inicial: str) -> str:
@@ -1448,7 +1497,11 @@ def _nombre_cuenta(marca: str, texto: str, fin: int) -> bool:
         return False
     entidad = m.group(2)
     propias = {n.split()[0] for n in _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])}
-    return entidad in propias or entidad not in _alias_todas_las_marcas()
+    if entidad in propias or entidad not in _alias_todas_las_marcas():
+        return True
+    # Cargo en una lista de marcas que incluye la de la fila ("de AVATR, Deepal y Changan").
+    lista = re.match(r'(?:(?:,| y| e) [\w-]+){1,6}', texto[fin + m.end(2):fin + m.end(2) + 120])
+    return bool(lista) and bool(set(re.findall(r'[\w-]+', lista.group())) & propias)
 
 
 def detecta_vocero(marca, titulo, resumen, voceros=None) -> bool:
@@ -1519,13 +1572,20 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
             elif detecta_vocero(marca, titulo, resumen, voceros):
                 valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
             else:
-                continue
+                valores = None
         elif marca == 'chery' and chery_sin_mencion(titulo, resumen):
             valores = ('No aplica', TEMA_CHERY_SIN_MENCION, '-')
         elif detecta_vocero(marca, titulo, resumen, voceros):
             valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
         else:
-            continue
+            valores = None
+        if valores is None:
+            if str(fila.get(SUBTEMA_COL, '')).strip() not in SUBTEMAS_PROYECCIONES:
+                continue
+            alternativo = str(fila.get(COL_SUBTEMA_ALTERNATIVO, '') or '').strip()
+            if not alternativo or alternativo in SUBTEMAS_PROYECCIONES or alternativo == 'nan':
+                alternativo = 'Mención'
+            valores = (fila.get('Tono'), (final_topic_map or {}).get(alternativo, 'Indefinido'), alternativo)
         df.loc[idx, ['Tono', 'Tema', SUBTEMA_COL]] = valores
     df.attrs['voceros_descubiertos'] = descubiertos
     return df

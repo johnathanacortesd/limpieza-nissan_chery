@@ -478,6 +478,79 @@ class CherySinMencionTests(unittest.TestCase):
         ])
 
 
+class ProyeccionesDelModeloTests(unittest.TestCase):
+    """El PKL pone Proyecciones - Balances; sin vocero de la marca no vale (2026-11-22)."""
+    AUTOFINANCIERA = (
+        "Autofinanciera es una compañía con 55 años de trayectoria en Colombia que ofrece un modelo de ahorro "
+        "programado como alternativa al crédito tradicional para adquirir vehículos, según explicó su "
+        "vicepresidente, Wilman Martínez. La empresa cuenta con alianzas con marcas como Chevrolet, Renault y "
+        "Kia, dispone de 42 sedes a nivel nacional y actualmente genera 800 empleos directos en el país.")
+
+    def _fila(self, **extra):
+        base = {"Resumen - Aclaracion": self.AUTOFINANCIERA, "Tono": "Positivo", "Tema": "Indefinido",
+                SUB: "Proyecciones - Balances", "_subtema_alternativo": "Estadísticas - Mercado"}
+        return {**base, **extra}
+
+    def test_sin_vocero_toma_la_segunda_opcion_del_modelo(self):
+        out = aplicar(_df(*[self._fila(**{"Menciones - Empresa": m}) for m in ("Chevrolet", "Renault", "Kia")]),
+                      final_topic_map={"Estadísticas - Mercado": "Indefinido", "Electrificación": "Tecnológico"})
+        self.assertEqual(list(zip(out["Tono"], out["Tema"], out[SUB])),
+                         [("Positivo", "Indefinido", "Estadísticas - Mercado")] * 3)
+        for m in ("Chevrolet", "Renault", "Kia"):
+            self.assertFalse(detecta_vocero(m, "", self.AUTOFINANCIERA), m)
+
+    def test_tema_sale_del_mapa_y_sin_alternativa_queda_mencion(self):
+        out = aplicar(_df(
+            self._fila(**{"Menciones - Empresa": "Kia", "_subtema_alternativo": "Electrificación"}),
+            self._fila(**{"Menciones - Empresa": "Kia", "_subtema_alternativo": ""}),
+            {**self._fila(**{"Menciones - Empresa": "Kia"}), SUB: "Proyecciones -Balances"},
+        ), final_topic_map={"Electrificación": "Tecnológico", "Estadísticas - Mercado": "Indefinido"})
+        self.assertEqual(list(zip(out["Tema"], out[SUB])), [
+            ("Tecnológico", "Electrificación"), ("Indefinido", "Mención"), ("Indefinido", "Estadísticas - Mercado")])
+
+    def test_con_vocero_de_la_marca_se_queda(self):
+        resumen = "Jorge Neira, director general de Kia Colombia, presentó el balance del año."
+        out = aplicar(_df(self._fila(**{"Menciones - Empresa": "Kia", "Resumen - Aclaracion": resumen})))
+        self.assertEqual(out[SUB].tolist(), ["Proyecciones - Balances"])
+
+    def test_juan_carlos_lopez_y_duplicadas_no_cambian(self):
+        out = aplicar(_df(
+            self._fila(**{"Menciones - Empresa": "Changan", "Resumen - Aclaracion": "Juan Carlos López habló."}),
+            {**self._fila(**{"Menciones - Empresa": "Kia"}), "is_duplicate": True, "Tono": "Duplicada",
+             "Tema": "-", SUB: "-"},
+        ))
+        self.assertEqual(list(zip(out["Tono"], out[SUB])),
+                         [("Positivo", "Proyecciones - Balances"), ("Duplicada", "-")])
+
+    def test_segunda_opcion_tema(self):
+        import numpy as np
+        fuente = _APP.read_text(encoding="utf-8")
+        arbol = ast.parse(fuente)
+        fn = next(n for n in arbol.body if isinstance(n, ast.FunctionDef) and n.name == "segunda_opcion_tema")
+        ns = {"np": np, "pd": pd, "SUBTEMAS_PROYECCIONES": R["SUBTEMAS_PROYECCIONES"]}
+        exec(compile(ast.Module([fn], []), str(_APP), "exec"), ns)
+
+        class Modelo:
+            classes_ = np.array(["Eventos", "Proyecciones - Balances", "Electrificación"])
+            def decision_function(self, textos):
+                return np.array([[0.1, 0.9, 0.3], [0.5, 0.8, 0.2]])[:len(textos)]
+
+        out = ns["segunda_opcion_tema"](Modelo(), pd.Series(["a", "b"], index=[7, 9]))
+        self.assertEqual(out.to_dict(), {7: "Electrificación", 9: "Eventos"})
+        self.assertEqual(ns["segunda_opcion_tema"](object(), pd.Series(["a"])).tolist(), ["Mención"])
+
+
+class ListaDeMarcasTests(unittest.TestCase):
+    def test_cargo_en_varias_marcas(self):
+        texto = "afirmó Cristhian Camelo, director de Mercadeo de AVATR, Deepal, NEVO y Changan Colombia."
+        for marca in ("AVATR", "Deepal", "Changan"):
+            self.assertTrue(detecta_vocero(marca, "", texto), marca)
+        self.assertFalse(detecta_vocero("Nissan", "", texto))
+        otra = "afirmó Ana Ruiz, directora de Mercadeo de AVATR, Deepal, NEVO y Changan Colombia."
+        for marca in ("AVATR", "Deepal", "Changan"):
+            self.assertTrue(detecta_vocero(marca, "", otra), marca)
+        self.assertFalse(detecta_vocero("Nissan", "", "El CEO de Tesla y Nissan anunciaron una alianza."))
+
 class AliasMarcaTests(unittest.TestCase):
     def test_jetour_nissan_pasa_a_jetour(self):
         fuente = _APP.read_text(encoding="utf-8")
