@@ -263,9 +263,13 @@ class DescubrirVocerosTests(unittest.TestCase):
     def test_voceros_investigados(self):
         for marca, nombre in (("Renault", "Juan Camilo Vélez"), ("Toyota", "Hiroshi Yonenaga"),
                               ("Hyundai", "Adriana Casadiego"), ("JMC", "Noel Ardila Rey"),
-                              ("iCAUR", None), ("Nissan", "Ricardo Toro")):
+                              ("iCAUR", None), ("Nissan", "Ricardo Toro"),
+                              ("iCAUR", "Hernán Novoa"), ("Xpeng", "Zhao Deli")):
             if nombre:
                 self.assertTrue(detecta_vocero(marca, "", f"Habló {nombre} sobre el año."), marca)
+        # Solo por nombre, sin cargo: cuentan para su marca y no para otra.
+        self.assertFalse(detecta_vocero("Chery", "", "Habló Hernán Novoa sobre el año."))
+        self.assertFalse(detecta_vocero("Tesla", "", "Habló Zhao Deli sobre el año."))
 
 
 class CeoGlobalesTests(unittest.TestCase):

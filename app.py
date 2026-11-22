@@ -1106,7 +1106,7 @@ VOCEROS_POR_MARCA = {
     'ford': ['José Llanos', 'Jim Farley', 'Guillermo Lastra'],
     'volvo': ['Alberto Telch', 'Ángela Bolívar', 'Håkan Samuelsson', 'Klaus Zellmer', 'Luis Pinto'],
     'suzuki': ['Verónica Borrero', 'Juan José Orozco', 'Juan David Uribe', 'Toshihiro Suzuki'],
-    'xpeng': ['Nicolás Muñoz', 'He Xiaopeng', 'Brian Gu'],
+    'xpeng': ['Nicolás Muñoz', 'He Xiaopeng', 'Brian Gu', 'Zhao Deli'],
     'zeekr': ['José Luis Porras', 'An Conghui', 'Gan Jiayue', 'Sebastián Gómez'],
     'jmc': ['Noel Ardila'],
     'jetour': ['Juan Diego Galindo', 'Andrés Felipe Naranjo'],
@@ -1114,7 +1114,7 @@ VOCEROS_POR_MARCA = {
     'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo'],
     'deepal': ['Deng Chenghao'],
     'avatr': ['Zhu Huarong', 'Chen Zhuo'],
-    'icaur': ['Paola Vivas'],
+    'icaur': ['Paola Vivas', 'Hernán Novoa'],
 }
 # Nombres con que aparece cada marca en el texto (sin tildes, minúsculas),
 # incluido su distribuidor cuando representa solo a esa marca. Los grupos con
