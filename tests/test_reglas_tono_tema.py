@@ -415,11 +415,13 @@ class CherySinMencionTests(unittest.TestCase):
             {"Resumen - Aclaracion": "CHERY presentó su portafolio.", "Menciones - Empresa": "Chery"},
             {"Resumen - Aclaracion": "Cherry presentó su portafolio.", "Menciones - Empresa": "Chery"},
             {"Resumen - Aclaracion": "La Tiggo 7 Pro llega en versión híbrida.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "El Omoda 5 y el Jaecoo 7 llegan a España.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "JAECOO presentó su nueva SUV.", "Menciones - Empresa": "Chery"},
             {"Título": "Chery Tiggo 4", "Resumen - Aclaracion": "", "Menciones - Empresa": "Chery"},
             {"Título": "", "Resumen - Aclaracion": "", "Menciones - Empresa": "Chery"},
             {"Resumen - Aclaracion": "Deepal presentó el S07.", "Menciones - Empresa": "Nissan"},
         ))
-        self.assertEqual(self._valores(out), [("Neutro", "Tecnológico", "Electrificación")] * 6)
+        self.assertEqual(self._valores(out), [("Neutro", "Tecnológico", "Electrificación")] * 8)
 
     def test_chery_sin_mencion_gana_a_vocero_pero_no_a_accidentes_ni_jcl(self):
         out = aplicar(_df(

@@ -1453,11 +1453,11 @@ def detecta_vocero(marca, titulo, resumen, voceros=None) -> bool:
 # Regla del usuario (2026-11-22): si la fila es de Chery y el Resumen -
 # Aclaracion no nombra a Chery, la nota es en realidad de Changan / Deepal
 # (Grupo Vardí) -> Tono "No aplica", Tema "Changan/Deepal", Subtema "-".
-# Cuenta como mención "Chery", la errata frecuente "Cherry" y sus modelos
-# Tiggo y Arrizo. Si el resumen viene vacío se mira el título; si ambos están
+# Cuenta como mención "Chery", la errata frecuente "Cherry", sus modelos
+# Tiggo y Arrizo y las marcas del grupo Chery Omoda y Jaecoo (2026-11-22). Si el resumen viene vacío se mira el título; si ambos están
 # vacíos no se toca la fila.
 TEMA_CHERY_SIN_MENCION = 'Changan/Deepal'
-_RE_MENCION_CHERY = re.compile(r'\b(?:cherr?y|tiggo|arrizo)\b')
+_RE_MENCION_CHERY = re.compile(r'\b(?:cherr?y|tiggo|arrizo|omoda|jaecoo)\b')
 
 
 def chery_sin_mencion(titulo, resumen) -> bool:
