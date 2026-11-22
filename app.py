@@ -890,6 +890,34 @@ def detect_duplicates(df: pd.DataFrame) -> pd.DataFrame:
 LABEL_MAP_TONO = {1: 'Positivo', 0: 'Neutro', -1: 'Negativo',
                   '1': 'Positivo', '0': 'Neutro', '-1': 'Negativo'}
 
+def segunda_opcion_tema(topic_pipeline, textos):
+    """Tema que el modelo daría si no pudiera elegir Proyecciones - Balances.
+
+    Proyecciones - Balances solo vale con vocero de la marca (ver
+    aplicar_reglas_tono_tema); cuando el modelo lo predice y no hay vocero, la
+    nota toma este tema. Usa decision_function (LinearSVC) o predict_proba.
+    """
+    textos = pd.Series(textos)
+    respaldo = pd.Series(['Mención'] * len(textos), index=textos.index)
+    if textos.empty:
+        return respaldo
+    try:
+        if hasattr(topic_pipeline, 'decision_function'):
+            puntajes = np.asarray(topic_pipeline.decision_function(textos))
+        else:
+            puntajes = np.asarray(topic_pipeline.predict_proba(textos))
+        clases = np.asarray(topic_pipeline.classes_)
+    except Exception:
+        return respaldo
+    if puntajes.ndim != 2 or puntajes.shape[1] != len(clases):
+        return respaldo
+    validas = ~np.isin(clases, list(SUBTEMAS_PROYECCIONES))
+    if not validas.any():
+        return respaldo
+    puntajes = np.where(validas, puntajes, -np.inf)
+    return pd.Series(clases[puntajes.argmax(axis=1)], index=textos.index)
+
+
 def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, progress_bar):
     df = df.copy()
     mask_unique = ~df['is_duplicate']
@@ -912,12 +940,13 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
     progress_bar.progress(72, text="Paso 6 / 7 — Clasificando temas con modelo PKL...")
     df_valid['_resumen_procesado'] = df_valid['_texto_ia'].apply(preprocess_text_for_topic)
     df_valid['Temas Generales - Tema'] = topic_pipeline.predict(df_valid['_resumen_procesado'])
+    df_valid[COL_SUBTEMA_ALTERNATIVO] = segunda_opcion_tema(topic_pipeline, df_valid['_resumen_procesado'])
 
     df_valid['_titulo_norm'] = df_valid['Título'].apply(normalize_title_for_comparison)
-    homo = df_valid.groupby('_titulo_norm')['Temas Generales - Tema'].transform(
-        lambda x: x.mode()[0] if not x.mode().empty else x
-    )
-    df_valid['Temas Generales - Tema'] = homo
+    for col in ('Temas Generales - Tema', COL_SUBTEMA_ALTERNATIVO):
+        df_valid[col] = df_valid.groupby('_titulo_norm')[col].transform(
+            lambda x: x.mode()[0] if not x.mode().empty else x
+        )
 
     df_valid['Tema'] = (
         df_valid['Temas Generales - Tema'].astype(str).str.strip()
@@ -927,7 +956,8 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 
     df_valid.drop(columns=['_texto_ia', '_resumen_procesado', '_titulo_norm'], inplace=True)
 
-    df.update(df_valid[['Tono', 'Temas Generales - Tema', 'Tema']])
+    df[COL_SUBTEMA_ALTERNATIVO] = ''
+    df.update(df_valid[['Tono', 'Temas Generales - Tema', 'Tema', COL_SUBTEMA_ALTERNATIVO]])
 
     mask_dup = df['is_duplicate']
     if mask_dup.any():
@@ -942,10 +972,14 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 # ──────────────────────────────────────────────────────────────────────────────
 # Reglas del usuario (2026-11-18). Se aplican solo a las notas no duplicadas y
 # reemplazan lo que dio el modelo PKL. Orden de prioridad:
-#   1. Accidente (de tránsito, choque, volcamiento, atropello...)
-#        -> Tono "No aplica", Tema "Accidentes", Subtema "-".
-#   2. Robo / hurto / delito
+#   0. Menciones - Empresa Kia y la nota nombra el "Kia Center" (arena de
+#      Orlando) -> Tono "No aplica", Tema "Kia Center", Subtema "-".
+#   1. Accidente (de tránsito, choque, volcamiento, atropello, incendio,
+#      emergencia natural...) -> Tono "No aplica", Tema "Accidentes", Subtema "-".
+#   2. Robo / hurto / atentado / delito
 #        -> Tono "No aplica", Tema "Orden público", Subtema "-".
+#   2b. Sorteo / lotería / concurso (Baloto, rifas...)
+#        -> Tono "No aplica", Tema "Sorteos", Subtema "-".
 #   3. Nota que menciona a Juan Carlos López:
 #        - Menciones - Empresa Nissan o Chery -> Tono "No aplica",
 #          Tema "Juan Carlos López", Subtema "-".
@@ -959,6 +993,11 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #      vocero; "representante", "jefe", "líder" y los plurales solo con nombre)
 #        -> Subtema "Proyecciones - Balances" y su Tema según Mapa_Temas
 #           (Indefinido); el Tono del PKL se conserva. Ver detecta_vocero().
+#   6. El modelo PKL predijo "Proyecciones - Balances" pero no hay vocero de
+#      la marca (regla del 2026-11-22: "Autofinanciera... según su
+#      vicepresidente" no es Proyecciones de Chevrolet)
+#        -> Subtema = segunda opción del modelo (segunda_opcion_tema) y su Tema
+#           según Mapa_Temas; el Tono se conserva.
 # Accidentes y delitos se detectan por palabras clave, sin tildes ni
 # mayúsculas. Hay palabras "fuertes" (accidente, choque, volcamiento,
 # robo, hurto...) y "de apoyo" (murió, heridos, capturado...):
@@ -972,6 +1011,9 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 # accidente o un delito ("pruebas de choque", "evitar accidentes",
 # "alerta de colisión", "protección ante un accidente", "sistema antirrobo"...).
 SUBTEMA_COL = 'Temas Generales - Tema'
+SUBTEMAS_PROYECCIONES = {'Proyecciones - Balances', 'Proyecciones -Balances'}
+# Columna interna (no sale en el Excel): segunda opción del modelo de temas.
+COL_SUBTEMA_ALTERNATIVO = '_subtema_alternativo'
 
 _ACCIDENTE_FUERTES = [
     r'accidentes?', r'siniestros? vial(?:es)?', r'choques?', r'choco',
@@ -990,13 +1032,16 @@ _ACCIDENTE_FUERTES = [
     r'emergencia invernal', r'ola invernal', r'creciente subita', r'vendavales?',
     r'tras (?:las |los |la |el |fuertes )?(?:inundaciones|granizadas?)',
     r'(?:reportaron|quedaron|resultaron|terminaron|fueron) (?:\w+ ){0,2}(?:inundad|arrastrad|sepultad)\w*',
+    # Incendios (regla del 2026-11-22: van a Accidentes, no a Orden público).
+    r'incendios?', r'se incendi\w*', r'incendiad[oa]s?', r'conflagracion', r'calcinad[oa]s?',
+    r'(?:quedo|quedaron|termino|terminaron|ardio|ardieron) en llamas',
 ]
 _ACCIDENTE_APOYO = [
     r'perdio la vida', r'perdieron la vida', r'(?:resulto|resultaron|quedo|quedaron) herid[oa]s?',
     r'herid[oa]s?', r'murio', r'murieron', r'muert[oa]s?', r'fallecid[oa]s?', r'transito',
     r'via\b', r'carretera', r'motociclistas?', r'peaton(?:es)?', r'conductor(?:a|es)?',
     r'accidentad[oa]s?', r'fallece', r'fallecio',
-    r'en llamas', r'incendio', r'inundaci\w*', r'inundad[oa]s?', r'lluvias?',
+    r'en llamas', r'bomberos', r'inundaci\w*', r'inundad[oa]s?', r'lluvias?',
     r'quebradas?', r'damnificad[oa]s?', r'afectaciones', r'danos materiales', r'emergencias?',
     r'precipitaciones',
 ]
@@ -1009,12 +1054,11 @@ _DELITO_FUERTES = [
     # Orden público en sentido amplio (base revisada de noviembre de 2026):
     r'desaparecid[oa]s?', r'desaparicion(?:es)?', r'atentados?', r'asesinat\w*', r'asesin[oa]s?',
     r'balead[oa]s?', r'balacera', r'sin vida', r'tras las rejas', r'ataque armado',
-    r'(?:hombres|sujetos|grupos?|delincuentes) armad[oa]s', r'incendios?', r'se incendio',
-    r'conflagracion', r'gaula', r'masacre', r'amenazas? de muerte', r'capturad[oa]s?', r'capturaron',
+    r'(?:hombres|sujetos|grupos?|delincuentes) armad[oa]s', r'gaula', r'masacre', r'amenazas? de muerte', r'capturad[oa]s?', r'capturaron',
 ]
 _DELITO_APOYO = [
     r'captura', r'desmantel\w*', r'policia', r'fiscalia', r'carcel', r'prision',
-    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*', r'recompensa', r'bomberos',
+    r'incaut\w*', r'denuncia\w*', r'autopartes', r'judicializ\w*', r'recompensa',
     r'victimas?', r'liberacion',
 ]
 _FRASES_NEUTRAS = [
@@ -1024,6 +1068,10 @@ _FRASES_NEUTRAS = [
     r'(?:alerta|aviso|advertencia|frenado|asistente|sistema|mitigacion) (?:de|ante|contra)'
     r' (?:\w+ ){0,2}(?:colision\w*|choques?|impactos?)',
     r'antirrobo', r'contra robos?', r'seguro contra \w+',
+    # Recalls y equipos: "riesgo de incendio", "sistema contra incendios".
+    r'(?:riesgos?|peligro|prevencion|prevenir|evitar|extintor\w*|extincion|sistemas?|resistencia|propagacion)'
+    r' (?:de|del|contra|al|a) (?:un |los |las )?(?:posibles? )?(?:incendios?|fuego)',
+    r'contra (?:incendios?|el fuego)',
     # Pruebas y argumentos de seguridad: "protección ante un accidente de gran impacto".
     r'(?:ante|en caso de|frente a|para) (?:un |una )?(?:posible |eventual )?(?:accidentes?|choques?|colision\w*|impactos?)',
 ]
@@ -1032,6 +1080,35 @@ _RE_ACC_F, _RE_ACC_A = _RE(_ACCIDENTE_FUERTES), _RE(_ACCIDENTE_APOYO)
 _RE_DEL_F, _RE_DEL_A = _RE(_DELITO_FUERTES), _RE(_DELITO_APOYO)
 _RE_NEUTRAS = re.compile(r'\b(?:' + '|'.join(_FRASES_NEUTRAS) + r')\b')
 _RE_JUAN_CARLOS_LOPEZ = re.compile(r'\bjuan carlos lopez\b')
+
+# Sorteos, loterías y concursos (regla del 2026-11-22) -> No aplica / Sorteos / -.
+# Mismo esquema: en el título basta una palabra fuerte; en el resumen, 2
+# fuertes distintas y 3 señales en total.
+_SORTEO_FUERTES = [
+    r'baloto', r'miloto', r'colorloto', r'loterias?', r'sorte(?:o|os|a|an|ara|aran|aron|ando)',
+    r'rifas?', r'rifara', r'rifaran', r'rifo', r'concursos?', r'premio mayor', r'super astro',
+    r'acumulado del \w+', r'raspa y gana', r'(?:boleta|boleto|billete) ganador\w*',
+]
+_SORTEO_APOYO = [
+    r'ganador(?:a|es|as)?', r'acumulado', r'premios?', r'boletas?', r'boletos?', r'participantes?',
+    r'participa\w*', r'inscri\w*', r'resultados?', r'numeros?', r'millones', r'chance',
+]
+_RE_SORT_F, _RE_SORT_A = _RE(_SORTEO_FUERTES), _RE(_SORTEO_APOYO)
+TEMA_SORTEOS = 'Sorteos'
+
+
+def es_sorteo(titulo, resumen) -> bool:
+    return _es_tema(titulo, resumen, _RE_SORT_F, _RE_SORT_A, min_fuertes=2, min_total=3)
+
+
+# Kia Center: arena de Orlando; la nota no es de la marca (regla del 2026-11-22).
+_RE_KIA_CENTER = re.compile(r'\bkia (?:center|centre)\b')
+TEMA_KIA_CENTER = 'Kia Center'
+
+
+def menciona_kia_center(*textos) -> bool:
+    return any(_RE_KIA_CENTER.search(_texto_plano(t)) for t in textos)
+
 
 _MARCAS_JCL_NO_APLICA = {'nissan', 'chery'}
 _MARCAS_JCL_POSITIVO  = {'avatr', 'changan', 'deepal'}
@@ -1130,9 +1207,10 @@ VOCEROS_POR_MARCA = {
     'jmc': ['Noel Ardila'],
     'jetour': ['Juan Diego Galindo', 'Andrés Felipe Naranjo'],
     'mazda': ['Ángela López', 'Ángela Patricia López', 'Jorge Enrique Wilson', 'Masahiro Moro', 'Miguel Barbeyto', 'Ryuichi Umeshita'],
-    'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo'],
-    'deepal': ['Deng Chenghao'],
-    'avatr': ['Zhu Huarong', 'Chen Zhuo'],
+    # Cristhian Camelo: director de mercadeo de AVATR, Deepal, NEVO y Changan Colombia.
+    'changan': ['Zhu Huarong', 'Cristhian Camilo Camelo', 'Cristhian Camelo', 'Cristian Camilo Camelo'],
+    'deepal': ['Deng Chenghao', 'Cristhian Camilo Camelo', 'Cristhian Camelo', 'Cristian Camilo Camelo'],
+    'avatr': ['Zhu Huarong', 'Chen Zhuo', 'Cristhian Camilo Camelo', 'Cristhian Camelo', 'Cristian Camilo Camelo'],
     'icaur': ['Paola Vivas', 'Hernán Novoa'],
 }
 # Nombres con que aparece cada marca en el texto (sin tildes, minúsculas),
@@ -1161,7 +1239,7 @@ _OTRAS_MARCAS = {
     'dongfeng', 'baic', 'great', 'wall', 'leapmotor', 'gac', 'aion', 'hongqi', 'opel', 'skoda',
     'lynk', 'polestar', 'smart', 'rivian', 'lucid', 'nio', 'xiaomi', 'huawei', 'seres', 'kaiyi',
     'astara', 'inchcape', 'vardi', 'autogermana', 'praco', 'didacol', 'derco', 'andemos', 'fenalco',
-    'andi', 'asopartes', 'ferrari', 'lamborghini', 'maserati',
+    'andi', 'asopartes', 'ferrari', 'lamborghini', 'maserati', 'nevo',
 }
 _MODELOS = {
     'hilux', 'frontier', 'kicks', 'versa', 'sentra', 'march', 'qashqai', 'leaf', 'patrol', 'tiggo',
@@ -1269,10 +1347,20 @@ def _alt_marca(marca: str) -> str:
     return r'(?:' + '|'.join(re.escape(n) for n in nombres) + r')\b'
 
 
+def _lista_de_marcas(marca: str) -> str:
+    """Otras marcas antes de la de la fila, en una lista con comas: 'director de mercadeo
+    de AVATR, Deepal, NEVO y Changan' cuenta para las cuatro. Sin coma no ('el CEO de
+    Tesla y Nissan anunciaron...' no es cargo en Nissan)."""
+    propias = set(_NOMBRES_MARCA_EN_TEXTO.get(marca, [marca]))
+    otras = sorted((a for a in _alias_todas_las_marcas() if a not in propias), key=len, reverse=True)
+    alt = r'(?:' + '|'.join(re.escape(a) for a in otras) + r')'
+    return r'(?:(?:' + alt + r', ){1,5}(?:' + alt + r' (?:y|e) )?)?'
+
+
 def _cargo_de_marca(marca: str, cargo_inicial: str) -> str:
     """Cargo + área/país + marca: 'gerente general de Nissan', 'CEO de la marca Chery'."""
     return (_cadena_cargos(cargo_inicial) + _HUECO
-            + r' (?:(?:de|del|en|para) ' + _ENTIDAD + r')?' + _alt_marca(marca))
+            + r' (?:(?:de|del|en|para) ' + _ENTIDAD + r')?' + _lista_de_marcas(marca) + _alt_marca(marca))
 
 
 def _su_cargo(marca: str, cargo_inicial: str) -> str:
@@ -1448,7 +1536,11 @@ def _nombre_cuenta(marca: str, texto: str, fin: int) -> bool:
         return False
     entidad = m.group(2)
     propias = {n.split()[0] for n in _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])}
-    return entidad in propias or entidad not in _alias_todas_las_marcas()
+    if entidad in propias or entidad not in _alias_todas_las_marcas():
+        return True
+    # Cargo en una lista de marcas que incluye la de la fila ("de AVATR, Deepal y Changan").
+    lista = re.match(r'(?:(?:,| y| e) [\w-]+){1,6}', texto[fin + m.end(2):fin + m.end(2) + 120])
+    return bool(lista) and bool(set(re.findall(r'[\w-]+', lista.group())) & propias)
 
 
 def detecta_vocero(marca, titulo, resumen, voceros=None) -> bool:
@@ -1507,10 +1599,14 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
         titulo, resumen = fila.get('Título', ''), fila.get('Resumen - Aclaracion', '')
         marca = str(fila.get('Menciones - Empresa', '') or '').strip().lower()
 
-        if es_accidente(titulo, resumen):
+        if marca == 'kia' and menciona_kia_center(titulo, resumen):
+            valores = ('No aplica', TEMA_KIA_CENTER, '-')
+        elif es_accidente(titulo, resumen):
             valores = ('No aplica', 'Accidentes', '-')
         elif es_delito(titulo, resumen):
             valores = ('No aplica', 'Orden público', '-')
+        elif es_sorteo(titulo, resumen):
+            valores = ('No aplica', TEMA_SORTEOS, '-')
         elif menciona_juan_carlos_lopez(titulo, resumen, fila.get('Autor - Conductor', '')):
             if marca in _MARCAS_JCL_NO_APLICA:
                 valores = ('No aplica', 'Juan Carlos López', '-')
@@ -1519,13 +1615,20 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
             elif detecta_vocero(marca, titulo, resumen, voceros):
                 valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
             else:
-                continue
+                valores = None
         elif marca == 'chery' and chery_sin_mencion(titulo, resumen):
             valores = ('No aplica', TEMA_CHERY_SIN_MENCION, '-')
         elif detecta_vocero(marca, titulo, resumen, voceros):
             valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
         else:
-            continue
+            valores = None
+        if valores is None:
+            if str(fila.get(SUBTEMA_COL, '')).strip() not in SUBTEMAS_PROYECCIONES:
+                continue
+            alternativo = str(fila.get(COL_SUBTEMA_ALTERNATIVO, '') or '').strip()
+            if not alternativo or alternativo in SUBTEMAS_PROYECCIONES or alternativo == 'nan':
+                alternativo = 'Mención'
+            valores = (fila.get('Tono'), (final_topic_map or {}).get(alternativo, 'Indefinido'), alternativo)
         df.loc[idx, ['Tono', 'Tema', SUBTEMA_COL]] = valores
     df.attrs['voceros_descubiertos'] = descubiertos
     return df
