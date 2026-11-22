@@ -397,6 +397,15 @@ class VocerosSinErroresTests(unittest.TestCase):
         )
         self.assertEqual(R["descubrir_voceros"](df), {"Tesla": ["Elon Musk"], "Toyota": ["Rafael Melo"]})
 
+    def test_directivo_en_singular_cuenta_sin_nombre(self):
+        # Base Competencia 22 nov. 2026: "Colombia y Japón reactivan su acuerdo comercial".
+        self.assertTrue(detecta_vocero("Toyota", "", "La otra reunión estratégica fue con un directivo de Toyota, "
+                                                     "una compañía con cinco décadas en el país."))
+        self.assertTrue(detecta_vocero("Nissan", "", "El directivo de Nissan habló de las ventas."))
+        self.assertFalse(detecta_vocero("Nissan", "", "Nissan y sus directivos celebraron los 10 años."))
+        self.assertFalse(detecta_vocero("Toyota", "", "La junta directiva de Toyota se reunió en Tokio."))
+        self.assertFalse(detecta_vocero("Toyota", "", "El exdirectivo de Toyota abrió su empresa."))
+
 
 class CherySinMencionTests(unittest.TestCase):
     def _valores(self, df):

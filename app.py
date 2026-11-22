@@ -1177,11 +1177,13 @@ def _alias_todas_las_marcas() -> frozenset:
 
 # ── Cargos ───────────────────────────────────────────────────────────────────
 # FUERTES: cargo en singular que señala a UNA persona concreta ("el CEO de
-# Chery", "la gerente general de Kia", "Nissan, a través de su presidente").
-# Cuentan aunque la nota no diga el nombre.
+# Chery", "la gerente general de Kia", "Nissan, a través de su presidente",
+# "un directivo de Toyota"). Cuentan aunque la nota no diga el nombre.
+# "Directiva" no va aquí: "la junta directiva de Toyota" es un órgano, no una persona.
 _CARGOS_FUERTES = (
     r'(?:ceo|cfo|coo|cmo|cto|presidente|presidenta|vicepresidente|vicepresidenta|gerente|'
-    r'director|directora|vocero|vocera|country manager|managing director|general manager|chairman)'
+    r'director|directora|directivo|vocero|vocera|country manager|managing director|general manager|'
+    r'chairman)'
 )
 # DÉBILES: solo cuentan con un nombre de persona pegado ("Ana Ruiz,
 # representante de Chery"). Sin nombre no dicen quién habla: "representante
@@ -1189,7 +1191,7 @@ _CARGOS_FUERTES = (
 # representante de Chery en Colombia") y los plurales ("los directivos de
 # Nissan", "sus voceros") no son una persona.
 _CARGOS_DEBILES = (
-    r'(?:representantes?|voceros|voceras|gerentes|directores|directoras|directivos?|directivas?|'
+    r'(?:representantes?|voceros|voceras|gerentes|directores|directoras|directivos|directivas?|'
     r'jefes?|jefas?|lider(?:es)?|ejecutivos?|ejecutivas?|fundador(?:a|es)?|cofundador(?:a|es)?)'
 )
 _CARGOS = r'(?:' + _CARGOS_FUERTES + r'|' + _CARGOS_DEBILES + r')'
