@@ -988,6 +988,9 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #   4. Menciones - Empresa Chery y el Resumen - Aclaracion no nombra a Chery
 #      (regla del 2026-11-22) -> Tono "No aplica", Tema "Changan/Deepal",
 #      Subtema "-". Ver chery_sin_mencion().
+#   4b. Menciones - Empresa Nissan, el resumen no dice Nissan y sí nombra a
+#      José Clopatofsky, New Holland, Grupo Vardí o "sedán" -> Tono "No
+#      aplica", Tema según el caso, Subtema "-". Ver tema_nissan_sin_mencion().
 #   5. Vocero de la marca de la fila (Menciones - Empresa) en Título o
 #      Resumen: una PERSONA de la marca (CEO, presidente, gerente, director,
 #      vocero; "representante", "jefe", "líder" y los plurales solo con nombre)
@@ -1578,6 +1581,32 @@ def chery_sin_mencion(titulo, resumen) -> bool:
     return bool(texto) and not _RE_MENCION_CHERY.search(texto)
 
 
+# ── Nissan sin mención ───────────────────────────────────────────────────────
+# Regla del usuario (2026-11-22): si la fila es de Nissan y el Resumen -
+# Aclaracion no dice "Nissan" (ni "Dinissan"), según lo que sí nombre:
+#   José Clopatofsky -> No aplica / José Clopatofsky / -
+#   New Holland      -> No aplica / New Holland / -
+#   Grupo Vardí      -> No aplica / Grupo Vardí / -
+#   sedán / sedanes  -> No aplica / Sedanes / -
+# En ese orden de prioridad. Si no nombra ninguno, la fila no se toca. Si el
+# resumen viene vacío se mira el título, como en la regla de Chery.
+_RE_MENCION_NISSAN = re.compile(r'\b(?:nissan|dinissan)\b')
+_NISSAN_SIN_MENCION = [
+    (re.compile(r'\bclopatof?sk[iy]\b'), 'José Clopatofsky'),
+    (re.compile(r'\bnew holland\b'), 'New Holland'),
+    (re.compile(r'\bgrupo vardi\b'), 'Grupo Vardí'),
+    (re.compile(r'\bsedan(?:es)?\b'), 'Sedanes'),
+]
+
+
+def tema_nissan_sin_mencion(titulo, resumen):
+    """Tema para una fila de Nissan cuyo resumen no dice Nissan, o None."""
+    texto = _texto_plano(resumen) or _texto_plano(titulo)
+    if not texto or _RE_MENCION_NISSAN.search(texto):
+        return None
+    return next((tema for patron, tema in _NISSAN_SIN_MENCION if patron.search(texto)), None)
+
+
 def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descubrir=True):
     """Aplica las reglas de negocio de arriba sobre Tono, Tema y Subtema.
 
@@ -1618,6 +1647,8 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
                 valores = None
         elif marca == 'chery' and chery_sin_mencion(titulo, resumen):
             valores = ('No aplica', TEMA_CHERY_SIN_MENCION, '-')
+        elif marca == 'nissan' and tema_nissan_sin_mencion(titulo, resumen):
+            valores = ('No aplica', tema_nissan_sin_mencion(titulo, resumen), '-')
         elif detecta_vocero(marca, titulo, resumen, voceros):
             valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
         else:

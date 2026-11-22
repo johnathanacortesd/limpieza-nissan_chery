@@ -597,6 +597,49 @@ class SorteosKiaCenterIncendiosTests(unittest.TestCase):
                                               ("No aplica", "Kia Center", "-"),
                                               ("Neutro", "Tecnológico", "Electrificación")])
 
+class NissanSinMencionTests(unittest.TestCase):
+    def _valores(self, df):
+        return list(zip(df["Tono"], df["Tema"], df[SUB]))
+
+    def test_casos(self):
+        casos = [
+            ("José Clopatofsky probó la nueva camioneta en la vía a La Calera.", "José Clopatofsky"),
+            ("JOSE CLOPATOSKY habla del mercado.", "José Clopatofsky"),
+            ("New Holland presentó tractores en Agroexpo.", "New Holland"),
+            ("Grupo Vardi abrió una vitrina en Cali.", "Grupo Vardí"),
+            ("Grupo Vardí presentó a AVATR.", "Grupo Vardí"),
+            ("Los sedanes pierden terreno frente a los SUV.", "Sedanes"),
+            ("El sedán más vendido del mes.", "Sedanes"),
+            ("Un sedan híbrido llega al país.", "Sedanes"),
+            # Prioridad: Clopatofsky > New Holland > Grupo Vardí > Sedanes.
+            ("Grupo Vardí exhibe un sedán.", "Grupo Vardí"),
+            ("José Clopatofsky probó el sedán de New Holland.", "José Clopatofsky"),
+            ("New Holland y Grupo Vardí firmaron alianza.", "New Holland"),
+        ]
+        out = aplicar(_df(*[{"Resumen - Aclaracion": r} for r, _ in casos]))
+        self.assertEqual(self._valores(out), [("No aplica", t, "-") for _, t in casos])
+
+    def test_si_dice_nissan_o_no_nombra_nada_no_cambia(self):
+        out = aplicar(_df(
+            {"Resumen - Aclaracion": "José Clopatofsky probó el Nissan Kicks."},
+            {"Resumen - Aclaracion": "El Sentra es el sedán de NISSAN."},
+            {"Resumen - Aclaracion": "Dinissan y Grupo Vardí abrieron vitrina."},
+            {"Resumen - Aclaracion": "El mercado creció 12 % en octubre."},
+            {"Resumen - Aclaracion": "Grupo Vardí presentó a AVATR.", "Menciones - Empresa": "Toyota"},
+            {"Título": "", "Resumen - Aclaracion": ""},
+        ))
+        self.assertEqual(self._valores(out), [("Neutro", "Tecnológico", "Electrificación")] * 6)
+
+    def test_resumen_vacio_usa_el_titulo(self):
+        out = aplicar(_df({"Título": "Los sedanes resisten", "Resumen - Aclaracion": ""},
+                          {"Título": "Nissan y los sedanes", "Resumen - Aclaracion": ""}))
+        self.assertEqual(self._valores(out), [("No aplica", "Sedanes", "-"), ("Neutro", "Tecnológico", "Electrificación")])
+
+    def test_accidentes_van_antes(self):
+        out = aplicar(_df({"Título": "Accidente de tránsito en la vía al Llano",
+                           "Resumen - Aclaracion": "Un sedán se volcó en la vía."}))
+        self.assertEqual(self._valores(out), [("No aplica", "Accidentes", "-")])
+
 class AliasMarcaTests(unittest.TestCase):
     def test_jetour_nissan_pasa_a_jetour(self):
         fuente = _APP.read_text(encoding="utf-8")
