@@ -965,9 +965,12 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #   - Título: basta una palabra fuerte.
 #   - Resumen: accidente con 2 palabras fuertes distintas (3 señales en total);
 #     orden público con 4 fuertes (6 en total). Ver es_accidente / es_delito.
+# Accidentes incluye las emergencias naturales que dañan vehículos
+# (desbordamientos, deslizamientos, "vehículos inundados") y los siniestros
+# graves aunque no digan "vial" (2026-11-22).
 # Antes de buscar se quitan frases de producto que no son noticias de un
 # accidente o un delito ("pruebas de choque", "evitar accidentes",
-# "alerta de colisión", "sistema antirrobo"...).
+# "alerta de colisión", "protección ante un accidente", "sistema antirrobo"...).
 SUBTEMA_COL = 'Temas Generales - Tema'
 
 _ACCIDENTE_FUERTES = [
@@ -976,12 +979,26 @@ _ACCIDENTE_FUERTES = [
     r'atropell\w*', r'arrollad[oa]s?', r'arrollo', r'se estrell\w*', r'estrello',
     r'(?:rodo|cayo|cayeron|rodaron) (?:a|por) un (?:abismo|precipicio)', r'tragedia vial',
     r'piques? ilegal(?:es)?',
+    # Siniestros sin la palabra "vial" (base Competencia, 22 nov. 2026: "un
+    # motociclista sufrió un grave siniestro... invadiera el carril").
+    r'(?:grave|aparatoso|tragico|fatal|terrible|fuerte) siniestro|sufri\w* un siniestro',
+    r'invadi\w* (?:el |su |otro |un )?carril', r'(?:envuelt|consumid)[oa]s? (?:en|por las) llamas',
+    # Emergencias naturales que afectan vehículos (inundación de la quebrada
+    # La Presidenta en El Poblado, misma base). "Inundación" sola no basta: hay
+    # notas de consejos ("cómo saber si un usado estuvo inundado").
+    r'desbordamientos?', r'se desbordo', r'avalanchas? de (?:lodo|tierra|piedras|agua)', r'deslizamientos? de tierra',
+    r'emergencia invernal', r'ola invernal', r'creciente subita', r'vendavales?',
+    r'tras (?:las |los |la |el |fuertes )?(?:inundaciones|granizadas?)',
+    r'(?:reportaron|quedaron|resultaron|terminaron|fueron) (?:\w+ ){0,2}(?:inundad|arrastrad|sepultad)\w*',
 ]
 _ACCIDENTE_APOYO = [
     r'perdio la vida', r'perdieron la vida', r'(?:resulto|resultaron|quedo|quedaron) herid[oa]s?',
     r'herid[oa]s?', r'murio', r'murieron', r'muert[oa]s?', r'fallecid[oa]s?', r'transito',
     r'via\b', r'carretera', r'motociclistas?', r'peaton(?:es)?', r'conductor(?:a|es)?',
     r'accidentad[oa]s?', r'fallece', r'fallecio',
+    r'en llamas', r'incendio', r'inundaci\w*', r'inundad[oa]s?', r'lluvias?',
+    r'quebradas?', r'damnificad[oa]s?', r'afectaciones', r'danos materiales', r'emergencias?',
+    r'precipitaciones',
 ]
 _DELITO_FUERTES = [
     r'robos?', r'roban', r'robaron', r'robad[oa]s?', r'hurtos?', r'hurtad[oa]s?', r'hurtaron',
@@ -1007,6 +1024,8 @@ _FRASES_NEUTRAS = [
     r'(?:alerta|aviso|advertencia|frenado|asistente|sistema|mitigacion) (?:de|ante|contra)'
     r' (?:\w+ ){0,2}(?:colision\w*|choques?|impactos?)',
     r'antirrobo', r'contra robos?', r'seguro contra \w+',
+    # Pruebas y argumentos de seguridad: "protección ante un accidente de gran impacto".
+    r'(?:ante|en caso de|frente a|para) (?:un |una )?(?:posible |eventual )?(?:accidentes?|choques?|colision\w*|impactos?)',
 ]
 _RE = lambda ps: [re.compile(r'\b' + p + r'\b') for p in ps]
 _RE_ACC_F, _RE_ACC_A = _RE(_ACCIDENTE_FUERTES), _RE(_ACCIDENTE_APOYO)
