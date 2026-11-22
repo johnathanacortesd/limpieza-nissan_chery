@@ -367,6 +367,36 @@ class VocerosSinErroresTests(unittest.TestCase):
             self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca})),
                              {}, texto)
 
+    def test_casos_reales_de_la_base_competencia_nov_2026(self):
+        # Sí son voceros:
+        for marca, texto in (
+            ("Chevrolet", "afirma Hermann Mahnke, director de experiencias y servicios digitales de GM Sudamérica."),
+            ("iCAUR", "señaló Hernán Novoa, director de marca iCAUR en Colombia."),
+            ("BYD", "su estilo de vida, Leidy Silva - Jefe de Planeación y Desarrollo deProducto de BYD - Motorysa."),
+            ("Xpeng", "El fundador de Xpeng, Zhao Deli, ha explicado que ya se hicieron demostraciones."),
+        ):
+            self.assertTrue(detecta_vocero(marca, "", texto), texto)
+        # No son voceros (empresa distribuidora o grupo sin persona):
+        for marca, texto in (
+            ("BYD", "Motorysa, que ya completa seis años como representante de BYD en Colombia, estará a cargo."),
+            ("Jetour", "bajo la marca Karry a cargo de Autocom, también representante de Jetour, tiene un motor."),
+            ("Renault", "Según los representantes de Renault-Sofasa, el modelo ya recibió adaptaciones."),
+            ("Renault", "Al evento asistieron representantes del Gobierno Nacional y directivos de Sofasa."),
+        ):
+            self.assertFalse(detecta_vocero(marca, "", texto), texto)
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca})),
+                             {}, texto)
+
+    def test_pule_nombres_descubiertos(self):
+        df = _df(
+            {"Resumen - Aclaracion": "Trump Elon Musk, CEO de Tesla, habló.", "Menciones - Empresa": "Tesla"},
+            {"Resumen - Aclaracion": "Dato relevante Rafael Melo, gerente de ventas de Toyota, habló.",
+             "Menciones - Empresa": "Toyota"},
+            {"Resumen - Aclaracion": "Toyota Financial Services, representante de Toyota, ofrece créditos.",
+             "Menciones - Empresa": "Toyota"},
+        )
+        self.assertEqual(R["descubrir_voceros"](df), {"Tesla": ["Elon Musk"], "Toyota": ["Rafael Melo"]})
+
 
 class CherySinMencionTests(unittest.TestCase):
     def _valores(self, df):

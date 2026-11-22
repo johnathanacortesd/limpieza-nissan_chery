@@ -1018,6 +1018,11 @@ _MARCAS_JCL_NO_APLICA = {'nissan', 'chery'}
 _MARCAS_JCL_POSITIVO  = {'avatr', 'changan', 'deepal'}
 
 
+# Textos sacados de PDF traen "de" pegado a la palabra siguiente ("Gerente
+# deMercadeo de BYD"); se separa solo cuando sigue una mayúscula.
+_RE_DE_PEGADO = re.compile(r'\b(de|del)(?=[A-Z][a-z])')
+
+
 @lru_cache(maxsize=50000)
 def _texto_plano(texto) -> str:
     """Minúsculas, sin tildes y con espacios simples, para buscar palabras clave."""
@@ -1025,6 +1030,7 @@ def _texto_plano(texto) -> str:
         return ''
     texto = unicodedata.normalize('NFKD', texto)
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
+    texto = _RE_DE_PEGADO.sub(r'\1 ', texto)
     return re.sub(r'\s+', ' ', texto.lower()).strip()
 
 
@@ -1155,6 +1161,7 @@ _PALABRAS_DE_EMPRESA = {
     'asociacion', 'ministerio', 'gobierno', 'alcaldia', 'gobernacion', 'fundacion', 'banco',
     'universidad', 'superintendencia', 'superfinanciera', 'policia', 'fiscalia', 'concejo',
     'congreso', 'senado', 'revista', 'diario', 'noticias', 'canal', 'radio', 'electric', 'electrico',
+    'financial', 'services', 'service', 'solutions', 'bank', 'capital', 'leasing', 'renting', 'seguros',
 }
 
 
@@ -1209,17 +1216,20 @@ _ADJ_CARGO = (
 # presidente de Fenalco en el evento de Nissan" o "el presidente de Colombia
 # visitó la planta de Renault" contaban como vocero.
 _AREAS = (
-    r'(?:mercadeo|marketing|ventas|posventa|postventa|servicios?|productos?|comunicaciones|'
-    r'comunicacion|prensa|marcas?|comercial|operaciones|operacion|finanzas|planeacion|estrategia|'
-    r'desarrollo|negocios?|nuevos|unidad|division|area|vehiculos|electricos|electrificacion|'
-    r'movilidad|sostenibilidad|ingenieria|diseno|centro|tecnologia|innovacion|experiencia|'
-    r'clientes?|relaciones|publicas|asuntos|corporativos|gubernamentales|recursos|humanos|'
-    r'talento|red|redes|concesionarios|distribucion|flotas|camiones|buses|pesados|comerciales|'
-    r'livianos|lujo|premium|calidad|compras|exportaciones|manufactura|produccion|planta|'
-    r'logistica|repuestos|sintesis|tecnica|junta|directiva|consejo|administracion|comite|'
-    r'pais|region|andina|colombia|latinoamerica|america|latina|sudamerica|suramerica|'
-    r'centroamerica|caribe|mexico|peru|ecuador|chile|venezuela|panama|europa|asia|china|mundo|'
-    r'internacional|global|general|ejecutiv[oa])'
+    r'(?:(?:mercadeo|marketing|ventas?|posventa|postventa|servicio|producto|comunicacion|'
+    r'comunicaciones|prensa|marca|comercial|operacion|operaciones|finanzas|planeacion|estrategia|'
+    r'desarrollo|negocio|nuevo|unidad|division|area|vehiculo|electrico|electrificacion|movilidad|'
+    r'sostenibilidad|ingenieria|diseno|centro|tecnologia|innovacion|experiencia|cliente|relacion|'
+    r'relaciones|publica|asunto|corporativo|gubernamental|recurso|humano|talento|red|distribucion|'
+    r'flota|camion|bus|buse|pesado|liviano|lujo|premium|calidad|compra|exportacion|importacion|'
+    r'manufactura|produccion|planta|logistica|repuesto|sintesis|tecnica|tecnico|junta|directiva|'
+    r'consejo|administracion|comite|digital|conectividad|software|inteligencia|artificial|'
+    r'transformacion|mercado|alianza|legal|juridica|gestion|proyecto|programa|cadena|suministro|'
+    r'abastecimiento|evento|patrocinio|publicidad|medio|canal|retail|renting|financiacion|credito|'
+    r'seguro|financiero|financiera|relacionamiento|territorio|zona|sostenible|accesorio|'
+    r'concesionarios|pais|region|andina|colombia|latinoamerica|america|latina|sudamerica|'
+    r'suramerica|centroamerica|caribe|mexico|peru|ecuador|chile|venezuela|panama|europa|asia|'
+    r'china|mundo|internacional|global|general|ejecutiv[oa])(?:e?s)?)'
 )
 _HUECO = (r'(?: (?:de|del|para|en|y|e) (?:la |el |los |las )?' + _AREAS
           + r'(?: ' + _AREAS + r'){0,3}){0,4}')
@@ -1291,7 +1301,7 @@ def _texto_sin_tildes(texto) -> str:
         return ''
     texto = unicodedata.normalize('NFKD', texto)
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
-    return re.sub(r'\s+', ' ', texto)
+    return re.sub(r'\s+', ' ', _RE_DE_PEGADO.sub(r'\1 ', texto))
 
 
 @lru_cache(maxsize=None)
@@ -1299,8 +1309,8 @@ def _regex_descubrir(marca: str):
     cargo_marca = r'(?i:(?:el |la |su |nuevo |nueva |actual )?' + _cargo_de_marca(marca, _CARGOS) + r')'
     su_cargo = r'(?i:' + _su_cargo(marca, _CARGOS) + r')'
     return re.compile(
-        _NOMBRE + r', ' + cargo_marca                                  # Ana Pérez, gerente de Nissan
-        + r'|' + cargo_marca + r'(?i:(?: \w+){0,2}),? ' + _NOMBRE + r'\b'  # el gerente de Nissan, Ana Pérez
+        _NOMBRE + r'(?:,| [-–]) ' + cargo_marca                        # Ana Pérez, gerente de Nissan
+        + r'|' + cargo_marca + r'(?i:(?: \w+){0,2})(?:,| [-–])? ' + _NOMBRE + r'\b'  # el gerente de Nissan, Ana Pérez
         + r'|' + su_cargo + r',? ' + _NOMBRE + r'\b'                   # Nissan, a través de su gerente, Ana Pérez
     )
 
@@ -1340,18 +1350,46 @@ def _nombres_con_cargo(marca: str, titulo, resumen) -> list:
     return nombres
 
 
-def descubrir_voceros(df) -> dict:
+def _pulir_nombre(nombre: str, conocidos: list, minusculas: set) -> str:
+    """Arregla lo que se pega delante del nombre ("Trump Elon Musk", "Relevante Rafael
+    Melo", "Portafolio Felipe Negret"): si contiene un vocero conocido de la marca, queda
+    ese; si no, se quitan palabras iniciales que en el dossier se usan en minúscula
+    (palabras comunes, no nombres), dejando al menos dos."""
+    plano = _texto_plano(nombre)
+    for conocido in sorted(conocidos, key=len, reverse=True):
+        c = _texto_plano(conocido)
+        if len(c.split()) >= 2 and re.search(r'\b' + re.escape(c) + r'\b', plano):
+            return _texto_sin_tildes(conocido).strip()
+        if re.search(r'\b' + re.escape(plano) + r'\b', c):
+            return _texto_sin_tildes(conocido).strip()
+    palabras = nombre.split()
+    while len(palabras) > 2 and palabras[0].lower() in minusculas:
+        palabras.pop(0)
+    return ' '.join(palabras)
+
+
+def descubrir_voceros(df, conocidos=None) -> dict:
     """{marca: [nombres]} hallados con cargo + marca en las notas no duplicadas."""
     hallados = {}
     if df.empty or 'Menciones - Empresa' not in df.columns:
         return hallados
     no_dup = ~df['is_duplicate'] if 'is_duplicate' in df.columns else pd.Series(True, index=df.index)
+    conocidos_por_marca = {k: list(v) for k, v in VOCEROS_POR_MARCA.items()}
+    for marca, nombres in (conocidos or {}).items():
+        conocidos_por_marca.setdefault(_texto_plano(marca), []).extend(nombres)
+    minusculas = None
     for marca_original, grupo in df[no_dup].groupby('Menciones - Empresa'):
         marca = _texto_plano(marca_original)
         if not marca:
             continue
         for _, fila in grupo.iterrows():
             for nombre in _nombres_con_cargo(marca, fila.get('Título', ''), fila.get('Resumen - Aclaracion', '')):
+                if minusculas is None:  # palabras que el dossier escribe en minúscula
+                    minusculas = set()
+                    for col in ('Título', 'Resumen - Aclaracion'):
+                        for t in df.loc[no_dup, col].dropna().astype(str):
+                            minusculas.update(re.findall(r'\b[a-z]{3,}\b', _texto_sin_tildes(t)))
+                nombre = _pulir_nombre(nombre, conocidos_por_marca.get(marca, []), minusculas)
                 lista = hallados.setdefault(str(marca_original).strip(), [])
                 if nombre not in lista:
                     lista.append(nombre)
@@ -1435,7 +1473,7 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
     """
     df = df.copy()
     extra = {k: list(v) for k, v in (voceros_extra or {}).items()}
-    descubiertos = descubrir_voceros(df) if descubrir else {}
+    descubiertos = descubrir_voceros(df, voceros_extra) if descubrir else {}
     for marca, nombres in descubiertos.items():
         extra.setdefault(marca, []).extend(nombres)
     voceros = preparar_voceros(extra)
