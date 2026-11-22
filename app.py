@@ -13,6 +13,7 @@ import numpy as np
 import nltk
 from pathlib import Path
 from difflib import SequenceMatcher
+from functools import lru_cache
 from collections import defaultdict
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -950,8 +951,12 @@ def classify_with_pkl(df, sentiment_pipeline, topic_pipeline, final_topic_map, p
 #          Tema "Juan Carlos López", Subtema "-".
 #        - AVATR, Changan o Deepal -> Tono "Positivo", Tema "Indefinido",
 #          Subtema "Proyecciones - Balances".
-#   4. Vocero de la marca de la fila (Menciones - Empresa) en Título o
-#      Resumen (CEO, presidente, gerente, director, vocero, representante...)
+#   4. Menciones - Empresa Chery y el Resumen - Aclaracion no nombra a Chery
+#      (regla del 2026-11-22) -> Tono "No aplica", Tema "Changan/Deepal",
+#      Subtema "-". Ver chery_sin_mencion().
+#   5. Vocero de la marca de la fila (Menciones - Empresa) en Título o
+#      Resumen: una PERSONA de la marca (CEO, presidente, gerente, director,
+#      vocero; "representante", "jefe", "líder" y los plurales solo con nombre)
 #        -> Subtema "Proyecciones - Balances" y su Tema según Mapa_Temas
 #           (Indefinido); el Tono del PKL se conserva. Ver detecta_vocero().
 # Accidentes y delitos se detectan por palabras clave, sin tildes ni
@@ -1013,12 +1018,19 @@ _MARCAS_JCL_NO_APLICA = {'nissan', 'chery'}
 _MARCAS_JCL_POSITIVO  = {'avatr', 'changan', 'deepal'}
 
 
+# Textos sacados de PDF traen "de" pegado a la palabra siguiente ("Gerente
+# deMercadeo de BYD"); se separa solo cuando sigue una mayúscula.
+_RE_DE_PEGADO = re.compile(r'\b(de|del)(?=[A-Z][a-z])')
+
+
+@lru_cache(maxsize=50000)
 def _texto_plano(texto) -> str:
     """Minúsculas, sin tildes y con espacios simples, para buscar palabras clave."""
     if not isinstance(texto, str):
         return ''
     texto = unicodedata.normalize('NFKD', texto)
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
+    texto = _RE_DE_PEGADO.sub(r'\1 ', texto)
     return re.sub(r'\s+', ' ', texto.lower()).strip()
 
 
@@ -1053,12 +1065,19 @@ def menciona_juan_carlos_lopez(*textos) -> bool:
 # marca que trae la fila en Menciones - Empresa. Dos formas de detectarlo:
 #   a) Por nombre: VOCEROS_POR_MARCA (abajo) más la hoja opcional de Google
 #      Sheets VOCEROS_CSV_URL (columna A Marca, columna B Vocero).
-#   b) Por cargo ligado a la marca, en cualquier parte del título o resumen:
+#      Un nombre conocido no cuenta si la nota lo presenta con cargo en OTRA
+#      marca ("Carlos Vargas, gerente de Toyota") o como ex ("exgerente").
+#   b) Por cargo FUERTE en singular ligado a la marca, aunque no haya nombre:
 #      "gerente general de Nissan Colombia", "el CEO de Chery",
 #      "director de mercadeo de Nissan", "Nissan, a través de su presidente".
-#      El cargo tiene que estar unido a la marca (sin comas ni puntos en medio
-#      y a pocas palabras), para que "el presidente de Fenalco" en una nota de
-#      Nissan no cuente.
+#   c) Por persona + cualquier cargo de la marca: "Ana Ruiz, representante de
+#      Chery", "el jefe de producto de Nissan, Pedro Gil".
+#   Entre cargo y marca solo caben palabras de área o región (sin comas ni
+#   puntos), para que "el presidente de Fenalco en el evento de Nissan" o "el
+#   presidente de Colombia en la planta de Renault" no cuenten. Tampoco cuentan
+#   "representante" ni los plurales sin nombre (casi siempre son la empresa
+#   distribuidora o un grupo), ni los ex cargos ("expresidente", "el entonces
+#   CEO"), ni empresas o modelos tomados por nombre ("Auto Vardí", "Toyota Hilux").
 SUBTEMA_VOCEROS = 'Proyecciones - Balances'
 # Voceros conocidos en Colombia y CEO globales (investigación en prensa, noviembre de 2026;
 # fuentes y cargos en voceros_marcas.xlsx). La clave es la marca como queda en
@@ -1111,31 +1130,152 @@ _NOMBRES_MARCA_EN_TEXTO = {
     'toyota': ['toyota', 'automotores toyota'],
     'mg': ['mg', 'mg motor'],
 }
-_CARGOS = (
-    r'(?:ceo|cfo|coo|cmo|presidente|presidenta|vicepresidente|vicepresidenta|'
-    r'gerente|gerentes|director|directora|directores|directivo|directiva|directivos|'
-    r'vocero|vocera|voceros|representante|representantes|country manager|'
-    r'managing director|general manager|jefe|jefa|lider)'
+# Marcas (y algunos modelos) que aparecen en los dossiers. Sirven para dos
+# cosas: (1) una palabra de esta lista nunca es parte del nombre de una
+# persona ("Toyota Hilux, líder del segmento" no es un vocero), y (2) si un
+# vocero conocido de una marca aparece presentado con cargo en OTRA marca
+# ("Carlos Vargas, gerente de Toyota"), no cuenta para la primera.
+_OTRAS_MARCAS = {
+    'audi', 'bmw', 'mercedes', 'benz', 'porsche', 'peugeot', 'citroen', 'fiat', 'jeep', 'ram',
+    'dodge', 'mitsubishi', 'subaru', 'honda', 'lexus', 'jac', 'foton', 'dfsk', 'haval', 'gwm',
+    'omoda', 'jaecoo', 'exeed', 'seat', 'cupra', 'mini', 'jaguar', 'isuzu', 'hino', 'stellantis',
+    'dongfeng', 'baic', 'great', 'wall', 'leapmotor', 'gac', 'aion', 'hongqi', 'opel', 'skoda',
+    'lynk', 'polestar', 'smart', 'rivian', 'lucid', 'nio', 'xiaomi', 'huawei', 'seres', 'kaiyi',
+    'astara', 'inchcape', 'vardi', 'autogermana', 'praco', 'didacol', 'derco', 'andemos', 'fenalco',
+    'andi', 'asopartes', 'ferrari', 'lamborghini', 'maserati',
+}
+_MODELOS = {
+    'hilux', 'frontier', 'kicks', 'versa', 'sentra', 'march', 'qashqai', 'leaf', 'patrol', 'tiggo',
+    'arrizo', 'duster', 'logan', 'sandero', 'stepway', 'koleos', 'kwid', 'captur', 'kardian',
+    'onix', 'tracker', 'spark', 'captiva', 'corolla', 'yaris', 'fortuner', 'prado', 'sportage',
+    'picanto', 'seltos', 'sonet', 'tucson', 'creta', 'kona', 'polo', 'nivus', 'taos', 'tiguan',
+    'amarok', 'dolphin', 'seal', 'yuan', 'atto', 'shark', 'cybertruck', 'cybercab', 'mustang',
+    'ranger', 'bronco', 'raptor', 'escape', 'territory', 'swift', 'vitara', 'jimny', 'cx',
+}
+_PALABRAS_DE_EMPRESA = {
+    'auto', 'autos', 'automotores', 'automotriz', 'motor', 'motors', 'grupo', 'group', 'holding',
+    'corporacion', 'compania', 'company', 'distribuidora', 'distribuidor', 'importadora',
+    'importador', 'inversiones', 'comercial', 'comercializadora', 'industrias', 'industria',
+    'vehiculos', 'concesionario', 'concesionarios', 'sas', 'ltda', 'international', 'internacional',
+    'latam', 'mobility', 'movilidad', 'energy', 'cars', 'trucks', 'tecnologia', 'centro', 'camara',
+    'asociacion', 'ministerio', 'gobierno', 'alcaldia', 'gobernacion', 'fundacion', 'banco',
+    'universidad', 'superintendencia', 'superfinanciera', 'policia', 'fiscalia', 'concejo',
+    'congreso', 'senado', 'revista', 'diario', 'noticias', 'canal', 'radio', 'electric', 'electrico',
+    'financial', 'services', 'service', 'solutions', 'bank', 'capital', 'leasing', 'renting', 'seguros',
+}
+
+
+@lru_cache(maxsize=None)
+def _alias_todas_las_marcas() -> frozenset:
+    alias = set(_OTRAS_MARCAS)
+    for marca in VOCEROS_POR_MARCA:
+        alias.add(marca)
+    for nombres in _NOMBRES_MARCA_EN_TEXTO.values():
+        alias.update(nombres)
+    return frozenset(alias)
+
+
+# ── Cargos ───────────────────────────────────────────────────────────────────
+# FUERTES: cargo en singular que señala a UNA persona concreta ("el CEO de
+# Chery", "la gerente general de Kia", "Nissan, a través de su presidente").
+# Cuentan aunque la nota no diga el nombre.
+_CARGOS_FUERTES = (
+    r'(?:ceo|cfo|coo|cmo|cto|presidente|presidenta|vicepresidente|vicepresidenta|gerente|'
+    r'director|directora|vocero|vocera|country manager|managing director|general manager|chairman)'
 )
-_ENTIDAD = r'(?:la marca |la compania |la empresa |el grupo |la automotriz |la fabricante |la ensambladora )?'
+# DÉBILES: solo cuentan con un nombre de persona pegado ("Ana Ruiz,
+# representante de Chery"). Sin nombre no dicen quién habla: "representante
+# de Chery" casi siempre es la empresa distribuidora ("Auto Vardí,
+# representante de Chery en Colombia") y los plurales ("los directivos de
+# Nissan", "sus voceros") no son una persona.
+_CARGOS_DEBILES = (
+    r'(?:representantes?|voceros|voceras|gerentes|directores|directoras|directivos?|directivas?|'
+    r'jefes?|jefas?|lider(?:es)?|ejecutivos?|ejecutivas?|fundador(?:a|es)?|cofundador(?:a|es)?)'
+)
+_CARGOS = r'(?:' + _CARGOS_FUERTES + r'|' + _CARGOS_DEBILES + r')'
+# Cargo que ya no ocupa: "expresidente", "ex gerente", "el antiguo CEO",
+# "el entonces presidente". No es vocero actual de la marca.
+_NO_VIGENTE = (
+    r'(?<!\bex )(?<!\bex-)(?<!antiguo )(?<!antigua )(?<!anterior )(?<!entonces )'
+    r'(?<!former )(?<!otrora )(?<!difunto )(?<!difunta )(?<!fallecido )(?<!fallecida )'
+)
+# "El presidente de Colombia (en la planta de Renault)" no es un vocero.
+_NO_ES_PRESIDENTE_DE_PAIS = (
+    r'(?! (?:de|del) (?:la republica|colombia|mexico|peru|chile|ecuador|venezuela|argentina|brasil|'
+    r'panama|estados unidos|ee ?uu|francia|china|japon|corea|alemania|el pais|pais|gobierno|'
+    r'el gobierno|la camara|el senado|el congreso|el concejo)\b)'
+)
+_ADJ_CARGO = (
+    r'(?: (?:general|comercial|ejecutiv[oa]|regional|global|mundial|nacional|local|adjunt[oa]|'
+    r'senior|interin[oa]|encargad[oa]|corporativ[oa]|financier[oa]|tecnic[oa]|operativ[oa]))*'
+)
+# Entre el cargo y la marca solo pueden ir palabras de un área, un país o una
+# región ("director de mercadeo y ventas de Nissan", "presidente para
+# Colombia y la región Andina de Renault", "vicepresidente del centro de
+# diseño de Xpeng"). Antes se aceptaban 5 palabras cualesquiera, y así "el
+# presidente de Fenalco en el evento de Nissan" o "el presidente de Colombia
+# visitó la planta de Renault" contaban como vocero.
+_AREAS = (
+    r'(?:(?:mercadeo|marketing|ventas?|posventa|postventa|servicio|producto|comunicacion|'
+    r'comunicaciones|prensa|marca|comercial|operacion|operaciones|finanzas|planeacion|estrategia|'
+    r'desarrollo|negocio|nuevo|unidad|division|area|vehiculo|electrico|electrificacion|movilidad|'
+    r'sostenibilidad|ingenieria|diseno|centro|tecnologia|innovacion|experiencia|cliente|relacion|'
+    r'relaciones|publica|asunto|corporativo|gubernamental|recurso|humano|talento|red|distribucion|'
+    r'flota|camion|bus|buse|pesado|liviano|lujo|premium|calidad|compra|exportacion|importacion|'
+    r'manufactura|produccion|planta|logistica|repuesto|sintesis|tecnica|tecnico|junta|directiva|'
+    r'consejo|administracion|comite|digital|conectividad|software|inteligencia|artificial|'
+    r'transformacion|mercado|alianza|legal|juridica|gestion|proyecto|programa|cadena|suministro|'
+    r'abastecimiento|evento|patrocinio|publicidad|medio|canal|retail|renting|financiacion|credito|'
+    r'seguro|financiero|financiera|relacionamiento|territorio|zona|sostenible|accesorio|'
+    r'concesionarios|pais|region|andina|colombia|latinoamerica|america|latina|sudamerica|'
+    r'suramerica|centroamerica|caribe|mexico|peru|ecuador|chile|venezuela|panama|europa|asia|'
+    r'china|mundo|internacional|global|general|ejecutiv[oa])(?:e?s)?)'
+)
+_HUECO = (r'(?: (?:de|del|para|en|y|e) (?:la |el |los |las )?' + _AREAS
+          + r'(?: ' + _AREAS + r'){0,3}){0,4}')
+_ENTIDAD = (r'(?:(?:la marca|la compania|la empresa|el grupo|la automotriz|la fabricante|'
+            r'la ensambladora|la firma|la filial|la casa matriz)(?: \w+)? )?')
 
 
-def _regex_marca(marca: str):
+def _cadena_cargos(cargo_inicial: str) -> str:
+    """'presidente y director general', 'gerente general y vocero'..."""
+    return (_NO_VIGENTE + r'\b' + cargo_inicial + r'\b' + _NO_ES_PRESIDENTE_DE_PAIS + _ADJ_CARGO
+            + r'(?:,? (?:y|e) ' + _CARGOS + r'\b' + _ADJ_CARGO + r')*')
+
+
+def _alt_marca(marca: str) -> str:
     nombres = _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])
-    alt = '|'.join(re.escape(n) for n in nombres)
-    return re.compile(
-        r'\b' + _CARGOS + r'\b(?: \w+){0,5} (?:de|del|en|para) ' + _ENTIDAD + r'(?:' + alt + r')\b'
-        r'|\b(?:' + alt + r')\b(?: \w+){0,2},? (?:a traves de |por medio de |segun |con )?(?:su|sus) '
-        + _CARGOS + r'\b'
-    )
+    return r'(?:' + '|'.join(re.escape(n) for n in nombres) + r')\b'
 
 
-# ── Descubrimiento de voceros dentro del dossier ─────────────────────────────
+def _cargo_de_marca(marca: str, cargo_inicial: str) -> str:
+    """Cargo + área/país + marca: 'gerente general de Nissan', 'CEO de la marca Chery'."""
+    return (_cadena_cargos(cargo_inicial) + _HUECO
+            + r' (?:(?:de|del|en|para) ' + _ENTIDAD + r')?' + _alt_marca(marca))
+
+
+def _su_cargo(marca: str, cargo_inicial: str) -> str:
+    """'Nissan Colombia, a través de su presidente', 'Toyota y su gerente general'."""
+    return (r'\b' + _alt_marca(marca) + r'(?: \w+){0,2},? (?:a traves de |por medio de |segun |con |y |'
+            r'junto a |de la mano de )?su (?:nuev[oa] |actual )?' + _cadena_cargos(cargo_inicial) + _HUECO)
+
+
+@lru_cache(maxsize=None)
+def _regex_marca(marca: str):
+    """Cargo FUERTE ligado a la marca: cuenta como vocero aunque no haya nombre."""
+    return re.compile(r'\b' + _cargo_de_marca(marca, _CARGOS_FUERTES)
+                      + r'|' + _su_cargo(marca, _CARGOS_FUERTES))
+
+
+# ── Nombre de persona + cargo + marca ────────────────────────────────────────
 # Si una nota dice "Ana Pérez, gerente general de Nissan Colombia" (o "el
 # gerente general de Nissan, Ana Pérez"), ese nombre queda como vocero de
 # Nissan para TODO el dossier: así se marcan también las notas donde solo
-# aparece "dijo Ana Pérez", aunque no repitan el cargo.
-_NOMBRE = r'([A-Z][a-z]+(?: (?:de la |de los |de las |del |de |dos |da )?[A-Z][a-z]+){1,3})'
+# aparece "dijo Ana Pérez", aunque no repitan el cargo. Aquí sí cuentan los
+# cargos débiles (representante, jefe, líder...), porque hay una persona.
+_PALABRA_NOMBRE = r"[A-Z][a-z]+(?:[-'][A-Za-z][a-z]+)?"
+_NOMBRE = (r'(' + _PALABRA_NOMBRE + r'(?: (?:de la |de los |de las |del |de |dos |da )?'
+           + _PALABRA_NOMBRE + r'){1,3})')
 _NO_SON_NOMBRES = {
     'el', 'la', 'los', 'las', 'en', 'de', 'del', 'por', 'para', 'con', 'segun', 'asi', 'este',
     'esta', 'desde', 'durante', 'tras', 'ademas', 'sin', 'sobre', 'entre', 'cuando', 'como',
@@ -1146,57 +1286,113 @@ _NO_SON_NOMBRES = {
     # Rótulos que los medios ponen antes del nombre ("Declaración clave: ...").
     'oficial', 'declaracion', 'declaraciones', 'clave', 'destaco', 'destaca', 'testimonio',
     'testimonios', 'datos', 'dato', 'foto', 'video', 'fuente', 'entrevista', 'dijo', 'explico',
+    # Palabras que abren una frase y quedan en mayúscula.
+    'tambien', 'asimismo', 'igualmente', 'finalmente', 'hoy', 'ayer', 'actualmente', 'recientemente',
+    'luego', 'despues', 'antes', 'mientras', 'aunque', 'pero', 'su', 'sus', 'al', 'lo', 'le', 'que',
+    'una', 'un', 'uno', 'estos', 'estas', 'ese', 'esa', 'aqui', 'alli', 'hace', 'gracias',
+    'presidente', 'presidenta', 'gerente', 'director', 'directora', 'vocero', 'vocera', 'ceo',
+    'representante', 'jefe', 'lider', 'ingeniero', 'ingeniera', 'doctor', 'doctora',
 }
 
 
+@lru_cache(maxsize=50000)
 def _texto_sin_tildes(texto) -> str:
     if not isinstance(texto, str):
         return ''
     texto = unicodedata.normalize('NFKD', texto)
     texto = ''.join(c for c in texto if not unicodedata.combining(c))
-    return re.sub(r'\s+', ' ', texto)
+    return re.sub(r'\s+', ' ', _RE_DE_PEGADO.sub(r'\1 ', texto))
 
 
+@lru_cache(maxsize=None)
 def _regex_descubrir(marca: str):
-    nombres = _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])
-    alt = '|'.join(re.escape(n) for n in nombres)
-    cargo_marca = (r'(?i:(?:el |la |su |nuevo |nueva |actual )?' + _CARGOS
-                   + r'\b(?: \w+){0,5} (?:de|del|en|para) ' + _ENTIDAD + r'(?:' + alt + r')\b(?: \w+){0,2})')
-    return re.compile(_NOMBRE + r', ' + cargo_marca + r'|' + cargo_marca + r',? ' + _NOMBRE + r'\b')
+    cargo_marca = r'(?i:(?:el |la |su |nuevo |nueva |actual )?' + _cargo_de_marca(marca, _CARGOS) + r')'
+    su_cargo = r'(?i:' + _su_cargo(marca, _CARGOS) + r')'
+    return re.compile(
+        _NOMBRE + r'(?:,| [-–]) ' + cargo_marca                        # Ana Pérez, gerente de Nissan
+        + r'|' + cargo_marca + r'(?i:(?: \w+){0,2})(?:,| [-–])? ' + _NOMBRE + r'\b'  # el gerente de Nissan, Ana Pérez
+        + r'|' + su_cargo + r',? ' + _NOMBRE + r'\b'                   # Nissan, a través de su gerente, Ana Pérez
+    )
 
 
 def _limpiar_nombre(nombre: str) -> str:
     """Quita palabras que no son de nombre al inicio ("En Bogota Ana Perez" -> "Ana Perez")
-    y devuelve '' si lo que queda no parece un nombre de persona (2+ palabras)."""
+    y devuelve '' si lo que queda no parece un nombre de persona (2+ palabras, sin
+    palabras de empresa ni marcas: "Auto Vardi", "Toyota Hilux", "Grupo Vardi")."""
     palabras = nombre.split()
     # Fuera rótulos y restos de 1-2 letras al inicio ("Aa Felipe Negret", "Ma Lopez").
     while palabras and (palabras[0].lower() in _NO_SON_NOMBRES | {'dos', 'da'} or len(palabras[0]) <= 2):
         palabras.pop(0)
     nucleo = [w for w in palabras if w.lower() not in ('de', 'del', 'dos', 'da', 'la', 'los', 'las')]
-    if len(nucleo) < 2 or any(w.lower() in _NO_SON_NOMBRES for w in nucleo):
+    if len(nucleo) < 2:
+        return ''
+    prohibidas = _NO_SON_NOMBRES | _PALABRAS_DE_EMPRESA | _MODELOS | _alias_todas_las_marcas()
+    if any(w.lower() in prohibidas or w.lower().split('-')[0] in prohibidas for w in nucleo):
         return ''
     return ' '.join(palabras)
 
 
-def descubrir_voceros(df) -> dict:
+@lru_cache(maxsize=None)
+def _regex_solo_marca(marca: str):
+    return re.compile(r'\b' + _alt_marca(marca))
+
+
+def _nombres_con_cargo(marca: str, titulo, resumen) -> list:
+    # Atajo: sin la marca escrita en el texto no puede haber "cargo de <marca>".
+    if not _regex_solo_marca(marca).search(_texto_plano(titulo) + ' . ' + _texto_plano(resumen)):
+        return []
+    texto = _texto_sin_tildes(titulo) + ' . ' + _texto_sin_tildes(resumen)
+    nombres = []
+    for m in _regex_descubrir(marca).finditer(texto):
+        nombre = _limpiar_nombre(next((g for g in m.groups() if g), '').strip())
+        if nombre and nombre not in nombres:
+            nombres.append(nombre)
+    return nombres
+
+
+def _pulir_nombre(nombre: str, conocidos: list, minusculas: set) -> str:
+    """Arregla lo que se pega delante del nombre ("Trump Elon Musk", "Relevante Rafael
+    Melo", "Portafolio Felipe Negret"): si contiene un vocero conocido de la marca, queda
+    ese; si no, se quitan palabras iniciales que en el dossier se usan en minúscula
+    (palabras comunes, no nombres), dejando al menos dos."""
+    plano = _texto_plano(nombre)
+    for conocido in sorted(conocidos, key=len, reverse=True):
+        c = _texto_plano(conocido)
+        if len(c.split()) >= 2 and re.search(r'\b' + re.escape(c) + r'\b', plano):
+            return _texto_sin_tildes(conocido).strip()
+        if re.search(r'\b' + re.escape(plano) + r'\b', c):
+            return _texto_sin_tildes(conocido).strip()
+    palabras = nombre.split()
+    while len(palabras) > 2 and palabras[0].lower() in minusculas:
+        palabras.pop(0)
+    return ' '.join(palabras)
+
+
+def descubrir_voceros(df, conocidos=None) -> dict:
     """{marca: [nombres]} hallados con cargo + marca en las notas no duplicadas."""
     hallados = {}
     if df.empty or 'Menciones - Empresa' not in df.columns:
         return hallados
     no_dup = ~df['is_duplicate'] if 'is_duplicate' in df.columns else pd.Series(True, index=df.index)
+    conocidos_por_marca = {k: list(v) for k, v in VOCEROS_POR_MARCA.items()}
+    for marca, nombres in (conocidos or {}).items():
+        conocidos_por_marca.setdefault(_texto_plano(marca), []).extend(nombres)
+    minusculas = None
     for marca_original, grupo in df[no_dup].groupby('Menciones - Empresa'):
         marca = _texto_plano(marca_original)
         if not marca:
             continue
-        patron = _regex_descubrir(marca)
         for _, fila in grupo.iterrows():
-            texto = _texto_sin_tildes(fila.get('Título', '')) + ' . ' + _texto_sin_tildes(fila.get('Resumen - Aclaracion', ''))
-            for m in patron.finditer(texto):
-                nombre = _limpiar_nombre((m.group(1) or m.group(2) or '').strip())
-                if nombre:
-                    lista = hallados.setdefault(str(marca_original).strip(), [])
-                    if nombre not in lista:
-                        lista.append(nombre)
+            for nombre in _nombres_con_cargo(marca, fila.get('Título', ''), fila.get('Resumen - Aclaracion', '')):
+                if minusculas is None:  # palabras que el dossier escribe en minúscula
+                    minusculas = set()
+                    for col in ('Título', 'Resumen - Aclaracion'):
+                        for t in df.loc[no_dup, col].dropna().astype(str):
+                            minusculas.update(re.findall(r'\b[a-z]{3,}\b', _texto_sin_tildes(t)))
+                nombre = _pulir_nombre(nombre, conocidos_por_marca.get(marca, []), minusculas)
+                lista = hallados.setdefault(str(marca_original).strip(), [])
+                if nombre not in lista:
+                    lista.append(nombre)
     return hallados
 
 
@@ -1212,15 +1408,61 @@ def preparar_voceros(extra=None) -> dict:
     return out
 
 
+# Lo que sigue a un nombre conocido: ", gerente de Toyota", ", expresidente de
+# Nissan". El grupo 1 es "ex"/"antiguo"... y el grupo 2 la palabra que sigue
+# a "de" (la entidad del cargo).
+_RE_CARGO_TRAS_NOMBRE = re.compile(
+    r'^,? (?:el |la |actual |nuev[oa] )?(ex ?-?|antigu[oa] |anterior |former |entonces )?'
+    + _CARGOS + _ADJ_CARGO + r'(?:,? (?:y|e) ' + _CARGOS + _ADJ_CARGO + r')*' + _HUECO
+    + r' (?:de|del|en|para) ' + _ENTIDAD + r'(\w+)'
+)
+
+
+def _nombre_cuenta(marca: str, texto: str, fin: int) -> bool:
+    """False si el nombre viene presentado como ex-cargo o con cargo en OTRA marca."""
+    m = _RE_CARGO_TRAS_NOMBRE.match(texto[fin:fin + 160])
+    if not m:
+        return True
+    if m.group(1):
+        return False
+    entidad = m.group(2)
+    propias = {n.split()[0] for n in _NOMBRES_MARCA_EN_TEXTO.get(marca, [marca])}
+    return entidad in propias or entidad not in _alias_todas_las_marcas()
+
+
 def detecta_vocero(marca, titulo, resumen, voceros=None) -> bool:
     marca = _texto_plano(marca)
     if not marca:
         return False
     voceros = voceros if voceros is not None else preparar_voceros()
     texto = _texto_plano(titulo) + ' . ' + _texto_plano(resumen)
-    if any(p.search(texto) for p in voceros.get(marca, [])):
+    # 1. Vocero conocido (lista fija, hoja de Sheets o hallado en el dossier).
+    for patron in voceros.get(marca, []):
+        if any(_nombre_cuenta(marca, texto, m.end()) for m in patron.finditer(texto)):
+            return True
+    if not _regex_solo_marca(marca).search(texto):
+        return False
+    # 2. Cargo fuerte ligado a la marca ("el CEO de Chery").
+    if _regex_marca(marca).search(texto):
         return True
-    return bool(_regex_marca(marca).search(texto))
+    # 3. Persona con cualquier cargo de la marca ("Ana Ruiz, representante de Chery").
+    return bool(_nombres_con_cargo(marca, titulo, resumen))
+
+
+# ── Chery sin mención ────────────────────────────────────────────────────────
+# Regla del usuario (2026-11-22): si la fila es de Chery y el Resumen -
+# Aclaracion no nombra a Chery, la nota es en realidad de Changan / Deepal
+# (Grupo Vardí) -> Tono "No aplica", Tema "Changan/Deepal", Subtema "-".
+# Cuenta como mención "Chery", la errata frecuente "Cherry", sus modelos
+# Tiggo y Arrizo y las marcas del grupo Chery Omoda y Jaecoo (2026-11-22). Si el resumen viene vacío se mira el título; si ambos están
+# vacíos no se toca la fila.
+TEMA_CHERY_SIN_MENCION = 'Changan/Deepal'
+_RE_MENCION_CHERY = re.compile(r'\b(?:cherr?y|tiggo|arrizo|omoda|jaecoo)\b')
+
+
+def chery_sin_mencion(titulo, resumen) -> bool:
+    texto = _texto_plano(resumen) or _texto_plano(titulo)
+    return bool(texto) and not _RE_MENCION_CHERY.search(texto)
 
 
 def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descubrir=True):
@@ -1231,7 +1473,7 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
     """
     df = df.copy()
     extra = {k: list(v) for k, v in (voceros_extra or {}).items()}
-    descubiertos = descubrir_voceros(df) if descubrir else {}
+    descubiertos = descubrir_voceros(df, voceros_extra) if descubrir else {}
     for marca, nombres in descubiertos.items():
         extra.setdefault(marca, []).extend(nombres)
     voceros = preparar_voceros(extra)
@@ -1257,6 +1499,8 @@ def aplicar_reglas_tono_tema(df, final_topic_map=None, voceros_extra=None, descu
                 valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
             else:
                 continue
+        elif marca == 'chery' and chery_sin_mencion(titulo, resumen):
+            valores = ('No aplica', TEMA_CHERY_SIN_MENCION, '-')
         elif detecta_vocero(marca, titulo, resumen, voceros):
             valores = (fila.get('Tono'), tema_voceros, SUBTEMA_VOCEROS)
         else:

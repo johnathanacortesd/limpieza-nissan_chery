@@ -5,6 +5,7 @@ import ast
 import re
 import unicodedata
 import unittest
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -18,7 +19,7 @@ def _cargar() -> dict:
     inicio = fuente.index("# REGLAS DE NEGOCIO SOBRE TONO / TEMA")
     fin = fuente.index("# GENERACIÓN DEL EXCEL DE SALIDA")
     seccion = ast.parse(fuente[inicio:fin])
-    ns = {"re": re, "unicodedata": unicodedata, "pd": pd}
+    ns = {"re": re, "unicodedata": unicodedata, "pd": pd, "lru_cache": lru_cache}
     exec(compile(seccion, str(_APP), "exec"), ns)
     return ns
 
@@ -216,7 +217,8 @@ class DescubrirVocerosTests(unittest.TestCase):
         df = _df(
             {"Resumen - Aclaracion": "Laura Méndez, gerente comercial de Nissan Colombia, habló del Salón."},
             {"Resumen - Aclaracion": largo + "Así lo explicó Laura Méndez en entrevista."},
-            {"Resumen - Aclaracion": largo + "Así lo explicó Laura Méndez en entrevista.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": largo + "Chery también habló. Así lo explicó Laura Méndez en entrevista.",
+             "Menciones - Empresa": "Chery"},
         )
         out = aplicar(df)
         self.assertEqual(out.attrs["voceros_descubiertos"], {"Nissan": ["Laura Mendez"]})
@@ -285,6 +287,157 @@ class CeoGlobalesTests(unittest.TestCase):
                               ("Hyundai", "Chung Eui-sun"), ("Xpeng", "He Xiaopeng"), ("Mazda", "Masahiro Moro")):
             self.assertTrue(detecta_vocero(marca, "", f"{nombre} habló de las metas del grupo."), marca)
         self.assertFalse(detecta_vocero("Kia", "", "Kenta Kon habló de las metas de Toyota."))
+
+
+class VocerosSinErroresTests(unittest.TestCase):
+    """Calibración del 2026-11-22: cargo sin persona, empresas y huecos largos."""
+
+    def test_representante_sin_persona_no_cuenta(self):
+        casos = [
+            ("Chery", "Chery, a través de su representante en Colombia, presentó el Tiggo 8."),
+            ("Chery", "Auto Vardí, representante de Chery en Colombia, presentó el Tiggo 8."),
+            ("Chery", "El representante de la marca Chery en el país anunció precios."),
+            ("Nissan", "Los representantes de Nissan estuvieron en el evento."),
+            ("Nissan", "Nissan y sus directivos celebraron los 10 años de la planta."),
+            ("Toyota", "La Hilux, el líder de ventas de Toyota, se renueva."),
+            ("Kia", "Los voceros de la marca Kia no respondieron."),
+            ("Renault", "El jefe de taller de Renault revisó el carro."),
+        ]
+        for marca, texto in casos:
+            self.assertFalse(detecta_vocero(marca, "", texto), texto)
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca})),
+                             {}, texto)
+
+    def test_representante_con_persona_si_cuenta(self):
+        texto = "Ana Ruiz, representante de Chery en Colombia, explicó la meta de ventas."
+        self.assertTrue(detecta_vocero("Chery", "", texto))
+        self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": "Chery"})),
+                         {"Chery": ["Ana Ruiz"]})
+        self.assertTrue(detecta_vocero("Nissan", "", "Nissan, a través de su líder de producto, Pedro Gil, presentó la Frontier."))
+
+    def test_cargo_lejos_de_la_marca_no_cuenta(self):
+        casos = [
+            ("Renault", "El presidente de Colombia visitó la planta de Renault en Envigado."),
+            ("Renault", "El presidente de Colombia en la planta de Renault habló de empleo."),
+            ("Nissan", "El presidente de Fenalco en el evento de Nissan habló de ventas."),
+            ("Toyota", "El gerente del concesionario de Toyota fue capturado."),
+            ("Nissan", "El director del noticiero habló del nuevo Nissan Kicks."),
+        ]
+        for marca, texto in casos:
+            self.assertFalse(detecta_vocero(marca, "", texto), texto)
+
+    def test_ex_cargos_no_cuentan(self):
+        casos = [
+            "Carlos Ghosn, expresidente de Nissan, habló desde Líbano.",
+            "El ex presidente de Nissan Carlos Ghosn publicó un libro.",
+            "El entonces presidente de Nissan fue arrestado en 2018.",
+            "El antiguo CEO de Nissan criticó la fusión.",
+        ]
+        for texto in casos:
+            self.assertFalse(detecta_vocero("Nissan", "", texto), texto)
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto})), {}, texto)
+
+    def test_vocero_conocido_con_cargo_en_otra_marca_no_cuenta(self):
+        self.assertFalse(detecta_vocero("Nissan", "", "Carlos Vargas, gerente de mercadeo de Toyota, habló."))
+        self.assertFalse(detecta_vocero("Nissan", "", "Carlos Vargas, exgerente de Nissan, abrió su empresa."))
+        self.assertTrue(detecta_vocero("Nissan", "", "Carlos Vargas, gerente de mercadeo de Nissan, habló."))
+        self.assertTrue(detecta_vocero("Nissan", "", "Carlos Vargas, gerente de la Fundación, habló de Nissan."))
+
+    def test_cargos_largos_de_la_marca_si_cuentan(self):
+        casos = [
+            ("Renault", "Juan Camilo Vélez, presidente y director general de Renault-Sofasa, dio el balance."),
+            ("Renault", "El presidente para Colombia y la región Andina de Renault habló del mercado."),
+            ("Xpeng", "El vicepresidente del centro de diseño de Xpeng presentó el G6."),
+            ("Nissan", "El director de producto Nissan Colombia explicó la e-Power."),
+            ("Toyota", "El presidente de la automotriz japonesa Toyota anunció inversiones."),
+            ("Toyota", "El presidente del consejo de administración de Toyota habló."),
+            ("Kia", "Kia y su nuevo gerente general presentaron metas para 2027."),
+            ("Hyundai", "LA GERENTE DE MERCADEO DE HYUNDAI COLOMBIA HABLÓ DEL AÑO."),
+        ]
+        for marca, texto in casos:
+            self.assertTrue(detecta_vocero(marca, "", texto), texto)
+
+    def test_no_descubre_empresas_ni_modelos(self):
+        textos = {
+            "Chery": "Grupo Vardi, representante de Chery, y Auto Vardí, distribuidor de Chery, crecen.",
+            "Toyota": "Toyota Hilux, líder del segmento de Toyota, se renueva.",
+            "Nissan": "Automotores Andinos, representante de Nissan en Nariño, abrió vitrina.",
+        }
+        for marca, texto in textos.items():
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca})),
+                             {}, texto)
+
+    def test_casos_reales_de_la_base_competencia_nov_2026(self):
+        # Sí son voceros:
+        for marca, texto in (
+            ("Chevrolet", "afirma Hermann Mahnke, director de experiencias y servicios digitales de GM Sudamérica."),
+            ("iCAUR", "señaló Hernán Novoa, director de marca iCAUR en Colombia."),
+            ("BYD", "su estilo de vida, Leidy Silva - Jefe de Planeación y Desarrollo deProducto de BYD - Motorysa."),
+            ("Xpeng", "El fundador de Xpeng, Zhao Deli, ha explicado que ya se hicieron demostraciones."),
+        ):
+            self.assertTrue(detecta_vocero(marca, "", texto), texto)
+        # No son voceros (empresa distribuidora o grupo sin persona):
+        for marca, texto in (
+            ("BYD", "Motorysa, que ya completa seis años como representante de BYD en Colombia, estará a cargo."),
+            ("Jetour", "bajo la marca Karry a cargo de Autocom, también representante de Jetour, tiene un motor."),
+            ("Renault", "Según los representantes de Renault-Sofasa, el modelo ya recibió adaptaciones."),
+            ("Renault", "Al evento asistieron representantes del Gobierno Nacional y directivos de Sofasa."),
+        ):
+            self.assertFalse(detecta_vocero(marca, "", texto), texto)
+            self.assertEqual(R["descubrir_voceros"](_df({"Resumen - Aclaracion": texto, "Menciones - Empresa": marca})),
+                             {}, texto)
+
+    def test_pule_nombres_descubiertos(self):
+        df = _df(
+            {"Resumen - Aclaracion": "Trump Elon Musk, CEO de Tesla, habló.", "Menciones - Empresa": "Tesla"},
+            {"Resumen - Aclaracion": "Dato relevante Rafael Melo, gerente de ventas de Toyota, habló.",
+             "Menciones - Empresa": "Toyota"},
+            {"Resumen - Aclaracion": "Toyota Financial Services, representante de Toyota, ofrece créditos.",
+             "Menciones - Empresa": "Toyota"},
+        )
+        self.assertEqual(R["descubrir_voceros"](df), {"Tesla": ["Elon Musk"], "Toyota": ["Rafael Melo"]})
+
+
+class CherySinMencionTests(unittest.TestCase):
+    def _valores(self, df):
+        return list(zip(df["Tono"], df["Tema"], df[SUB]))
+
+    def test_chery_sin_mencion_va_a_changan_deepal(self):
+        out = aplicar(_df(
+            {"Título": "Chery en el Salón", "Resumen - Aclaracion": "Deepal presentó el S07 en Bogotá.",
+             "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "Changan lanzó la CS55 Plus.", "Menciones - Empresa": "Chery"},
+        ))
+        self.assertEqual(self._valores(out), [("No aplica", "Changan/Deepal", "-")] * 2)
+
+    def test_chery_con_mencion_no_cambia(self):
+        out = aplicar(_df(
+            {"Resumen - Aclaracion": "CHERY presentó su portafolio.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "Cherry presentó su portafolio.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "La Tiggo 7 Pro llega en versión híbrida.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "El Omoda 5 y el Jaecoo 7 llegan a España.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "JAECOO presentó su nueva SUV.", "Menciones - Empresa": "Chery"},
+            {"Título": "Chery Tiggo 4", "Resumen - Aclaracion": "", "Menciones - Empresa": "Chery"},
+            {"Título": "", "Resumen - Aclaracion": "", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "Deepal presentó el S07.", "Menciones - Empresa": "Nissan"},
+        ))
+        self.assertEqual(self._valores(out), [("Neutro", "Tecnológico", "Electrificación")] * 8)
+
+    def test_chery_sin_mencion_gana_a_vocero_pero_no_a_accidentes_ni_jcl(self):
+        out = aplicar(_df(
+            {"Resumen - Aclaracion": "El CEO de Changan, Zhu Huarong, habló de metas.", "Menciones - Empresa": "Chery"},
+            {"Título": "Accidente de tránsito en la vía al Llano", "Resumen - Aclaracion": "Un carro se volcó.",
+             "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "Juan Carlos López presentó el Deepal S05.", "Menciones - Empresa": "Chery"},
+            {"Resumen - Aclaracion": "Deepal presentó el S07.", "Menciones - Empresa": "Chery",
+             "is_duplicate": True, "Tono": "Duplicada", "Tema": "-", SUB: "-"},
+        ))
+        self.assertEqual(self._valores(out), [
+            ("No aplica", "Changan/Deepal", "-"),
+            ("No aplica", "Accidentes", "-"),
+            ("No aplica", "Juan Carlos López", "-"),
+            ("Duplicada", "-", "-"),
+        ])
 
 
 class AliasMarcaTests(unittest.TestCase):
