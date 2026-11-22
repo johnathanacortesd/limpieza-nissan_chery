@@ -63,6 +63,31 @@ class DeteccionTests(unittest.TestCase):
         self.assertFalse(es_accidente("Murió el fundador de una marca de carros", ""))
         self.assertFalse(es_accidente("Cupra León VZ y Golf GTI suman sistemas que evitan choques", ""))
         self.assertFalse(es_accidente("Volvo exhibe un vehículo accidentado en el Salón del Automóvil", ""))
+    def test_casos_reales_de_la_base_competencia_nov_2026(self):
+        self.assertTrue(es_accidente(
+            "Lluvias en Sabaneta y balance de daños materiales en vehículos y parqueaderos tras inundaciones en El Poblado",
+            ""))
+        self.assertTrue(es_accidente("Lluvias en Sabaneta", (
+            "En el balance de afectaciones materiales ocasionadas por el desbordamiento de la quebrada La Presidenta "
+            "en el sector de El Poblado en Medellín, se reportaron vehículos inundados entre ellos un automóvil "
+            "Renault Twingo y un Ford Fiesta.")))
+        self.assertTrue(es_accidente("En llamas por un Tesla", (
+            "Mientras transitaba por una autopista de California (Estados Unidos), un motociclista sufrió un grave "
+            "siniestro luego de que un vehículo autónomo de Tesla, que circulaba sin conductor, invadiera "
+            "inesperadamente el carril. Tras el impacto, el tanque se rompió y lo dejó envuelto en llamas.")))
+
+    def test_emergencias_y_siniestros_que_no_son_accidente(self):
+        for titulo, resumen in (
+            ("Cómo saber si un carro usado estuvo inundado", ""),
+            ("La Nissan Patrol resiste inundaciones y lluvias", ""),
+            ("Avalancha de reservas para el nuevo BYD", ""),
+            ("Así quedó la movilidad en Bogotá tras las lluvias", ""),
+            ("Cómo reclamar un siniestro a la aseguradora", "El seguro cubre el siniestro si el carro tiene póliza."),
+            ("Lynk & Co 07 GT se lanzó de un barranco para demostrar su seguridad",
+             "La prueba buscaba mostrar la protección ante un accidente de gran impacto, con choques simulados."),
+        ):
+            self.assertFalse(es_accidente(titulo, resumen), titulo)
+
 
     def test_delitos(self):
         for t in ("Capturan banda dedicada al hurto de camionetas en Bogotá",
@@ -263,9 +288,13 @@ class DescubrirVocerosTests(unittest.TestCase):
     def test_voceros_investigados(self):
         for marca, nombre in (("Renault", "Juan Camilo Vélez"), ("Toyota", "Hiroshi Yonenaga"),
                               ("Hyundai", "Adriana Casadiego"), ("JMC", "Noel Ardila Rey"),
-                              ("iCAUR", None), ("Nissan", "Ricardo Toro")):
+                              ("iCAUR", None), ("Nissan", "Ricardo Toro"),
+                              ("iCAUR", "Hernán Novoa"), ("Xpeng", "Zhao Deli")):
             if nombre:
                 self.assertTrue(detecta_vocero(marca, "", f"Habló {nombre} sobre el año."), marca)
+        # Solo por nombre, sin cargo: cuentan para su marca y no para otra.
+        self.assertFalse(detecta_vocero("Chery", "", "Habló Hernán Novoa sobre el año."))
+        self.assertFalse(detecta_vocero("Tesla", "", "Habló Zhao Deli sobre el año."))
 
 
 class CeoGlobalesTests(unittest.TestCase):
